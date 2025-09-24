@@ -3,14 +3,6 @@ name: Publish application
 on:
   workflow_dispatch:
     inputs:
-      subscription_id:
-        description: Azure subscription ID that owns the deployment
-        required: true
-        type: string
-      resource_group:
-        description: Resource group that contains the Container App resources
-        required: true
-        type: string
       api_image_tag:
         description: Docker image tag to use for the API (leave empty to use the commit SHA)
         required: false
@@ -24,12 +16,12 @@ on:
       config_path:
         description: Optional path (relative to repo root) to the JSON config for secrets/app settings
         required: false
-        default: ""
+        default: "infra/scripts/deployment-settings.json"
         type: string
 
 env:
-  RESOURCE_GROUP: ${{ inputs.resource_group }}
-  SUBSCRIPTION_ID: ${{ inputs.subscription_id }}
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+  SUBSCRIPTION_ID: ${{ vars.SUBSCRIPTION_ID }}
   API_IMAGE_TAG: ${{ inputs.api_image_tag != '' && inputs.api_image_tag || github.sha }}
   WORKER_IMAGE_TAG: ${{ inputs.worker_image_tag != '' && inputs.worker_image_tag || github.sha }}
 
@@ -43,6 +35,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Write deployment config from secret
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.DEPLOYMENT_CONFIG }}" ]; then
+            mkdir -p infra/scripts
+            echo "${{ secrets.DEPLOYMENT_CONFIG }}" > infra/scripts/deployment-settings.json
+          fi
 
       - name: Sign in to Azure
         uses: azure/login@v2
