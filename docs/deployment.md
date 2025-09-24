@@ -25,6 +25,26 @@ The `infra/bicep/main.bicep` template provisions the following resources in **We
 - An Azure subscription where you have at least **Contributor** rights
 - Logged-in Azure CLI session (`az login`)
 
+## GitHub Actions Setup
+
+To use the automated publish workflow:
+
+1. **Set repository variables** (non-sensitive):
+   - Go to your repo > Settings > Secrets and variables > Actions > Variables
+   - Add `SUBSCRIPTION_ID` with your Azure subscription ID
+   - Add `RESOURCE_GROUP` with your resource group name
+
+2. **Set repository secrets** (sensitive):
+   - Go to your repo > Settings > Secrets and variables > Actions > Secrets
+   - Add `AZURE_CREDENTIALS` with your Azure service principal credentials (JSON format)
+   - Add `DEPLOYMENT_CONFIG` with the full JSON content of your `deployment-settings.json` (multiline secret)
+
+3. **Commit your config** (optional, if not using secret):
+   - Copy `infra/scripts/deployment-settings.example.json` to `infra/scripts/deployment-settings.json`
+   - Fill in your values and commit it (ensure no sensitive data is committed)
+
+The workflow will automatically use the variables and secrets, and you only need to provide image tags when triggering.
+
 ## 1. Provision infrastructure
 
 Use `infra/scripts/deploy-infrastructure.ps1` to compile the Bicep template and apply it to a resource group. The script creates the resource group if necessary and saves all deployment outputs to `infra/scripts/latest-deployment.json` for subsequent steps.
@@ -59,26 +79,31 @@ You can remove any keys you do not need; the publish script only pushes the valu
 
 ## 3. Publish containers and Functions code
 
+You can publish via the local script or the GitHub Actions workflow.
+
+### Local script
+
 `infra/scripts/publish-app.ps1` builds both Docker images, pushes them to the registry, updates the Container Apps resources to use the new tags, zips the Azure Function code, and deploys it with `az functionapp deployment source config-zip`.
 
 ```powershell
 ./infra/scripts/publish-app.ps1 \`
-    -SubscriptionId "a604d967-963b-4ff5-acb7-f0aaec811978" `
-    -ResourceGroupName "rg-ai-hedge-fund" `
-    -ApiImageTag "v1" `
-    -WorkerImageTag "v1" `
+    -SubscriptionId "a604d967-963b-4ff5-acb7-f0aaec811978" `\
+    -ResourceGroupName "rg-ai-hedge-fund" `\
+    -ApiImageTag "v1" `\
+    -WorkerImageTag "v1" `\
     -ConfigPath "infra/scripts/deployment-settings.json"
 ```
 
 The script reuses `infra/scripts/latest-deployment.json` by default. If you stored the Bicep outputs elsewhere, pass `-DeploymentInfoPath <path>`.
 
-### What the publish script does
+### GitHub Actions
 
-1. Logs into the subscription and Azure Container Registry.
-2. Builds and pushes `ai-hedge-fund-api:<tag>` and `ai-hedge-fund-worker:<tag>` from the repository root.
-3. Updates the Container App and queue worker job to reference the new images.
-4. Applies optional secrets/app settings defined in the JSON config file.
-5. Packages the `infra/monitoring` Function App and deploys it via zip deploy.
+Trigger the "Publish application" workflow from the Actions tab. It uses repository variables for subscription and resource group, and pulls the config from the `DEPLOYMENT_CONFIG` secret.
+
+- **Inputs**: Only specify image tags if you want custom ones (defaults to commit SHA).
+- **Config**: Automatically uses the JSON from the secret.
+
+This is recommended for CI/CD as it runs on GitHub's infrastructure.
 
 ## Validation checklist
 
