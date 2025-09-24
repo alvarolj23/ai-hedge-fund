@@ -106,6 +106,36 @@ jobs:
           echo "job_name=$job_name" >> "$GITHUB_OUTPUT"
           echo "function_app_name=$function_app_name" >> "$GITHUB_OUTPUT"
 
+      - name: Ensure ACR login
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACR_NAME="${{ steps.deployment.outputs.acr_name }}"
+          ACR_LOGIN_SERVER="${{ steps.deployment.outputs.acr_login_server }}"
+
+          echo "Checking ACR login for $ACR_NAME ($ACR_LOGIN_SERVER)"
+
+          # Try standard az acr login first (this will configure docker login on runners with docker)
+          if az acr login --name "$ACR_NAME" 2>/tmp/azacr.err; then
+            echo "az acr login succeeded"
+            exit 0
+          fi
+
+          echo "az acr login failed. Showing az error output:" >&2
+          sed -n '1,200p' /tmp/azacr.err || true
+
+          # Fallback: try token-based docker login (useable when az acr login doesn't configure docker)
+          echo "Attempting token-based docker login as fallback..."
+          token=$(az acr login -n "$ACR_NAME" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+          if [ -n "$token" ]; then
+            echo "$token" | docker login "$ACR_LOGIN_SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
+            echo "docker login (token) succeeded"
+          else
+            echo "Failed to obtain ACR token. Check that AZURE_CREDENTIALS repo secret is present and contains a valid clientSecret, and that the service principal has AcrPush on the registry." >&2
+            exit 1
+          fi
+
       - name: Publish application via PowerShell script
         shell: pwsh
         env:
