@@ -53,6 +53,15 @@ param acrSku string = 'Basic'
 @description('Enable Cosmos DB free tier (one account per subscription). Turn off if already consumed.')
 param enableCosmosFreeTier bool = true
 
+@description('Use public placeholder container images during infrastructure deployment to avoid failures before publishing application images.')
+param usePlaceholderImages bool = false
+
+@description('Placeholder image used for the API container app when usePlaceholderImages is true.')
+param placeholderApiImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
+@description('Placeholder image used for the queue worker job when usePlaceholderImages is true.')
+param placeholderWorkerImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
 // ------------------------- Naming -------------------------
 var baseName = toLower(replace(replace(namePrefix, '-', ''), '_', ''))
 var baseSegment = baseName == '' ? 'hedgefund' : baseName
@@ -83,6 +92,8 @@ var sanitizedDeadLetterQueueName = toLower(replace(deadLetterQueueName, '_', '-'
 
 var useExistingAcr = existingAcrName != ''
 var useExistingCosmos = existingCosmosAccountName != ''
+var apiContainerImage = usePlaceholderImages ? placeholderApiImage : '${acrLoginServer}/ai-hedge-fund-api:latest'
+var workerContainerImage = usePlaceholderImages ? placeholderWorkerImage : '${acrLoginServer}/ai-hedge-fund-worker:latest'
 
 // ------------------------- Log Analytics -------------------------
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
@@ -300,7 +311,7 @@ resource apiContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'api'
-          image: '${acrLoginServer}/ai-hedge-fund-api:latest'
+              image: apiContainerImage
           command: [ 'python' ]
           args: [ '-m', 'uvicorn', 'app.backend.main:app', '--host', '0.0.0.0', '--port', '8000' ]
           env: [
@@ -379,7 +390,7 @@ resource queueWorkerJob 'Microsoft.App/jobs@2024-03-01' = {
       containers: [
         {
           name: 'queue-worker'
-          image: '${acrLoginServer}/ai-hedge-fund-worker:latest'
+              image: workerContainerImage
           env: [
             { name: 'COSMOS_ENDPOINT', value: cosmosDocumentEndpoint }
             { name: 'COSMOS_KEY', secretRef: 'cosmos-key' }
