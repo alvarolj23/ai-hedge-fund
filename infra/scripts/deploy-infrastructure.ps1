@@ -44,6 +44,14 @@ param(
 
     [bool]$EnableCosmosFreeTier = $true,
 
+    [switch]$UsePlaceholderImages,
+
+    [ValidateNotNullOrEmpty()]
+    [string]$PlaceholderApiImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest',
+
+    [ValidateNotNullOrEmpty()]
+    [string]$PlaceholderWorkerImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest',
+
     [switch]$WhatIf
 )
 
@@ -164,6 +172,12 @@ try {
         $deploymentParams.Add("existingAcrPassword=$ExistingAcrPassword") | Out-Null
     }
 
+    if ($UsePlaceholderImages.IsPresent) {
+        $deploymentParams.Add("usePlaceholderImages=true") | Out-Null
+        $deploymentParams.Add("placeholderApiImage=$PlaceholderApiImage") | Out-Null
+        $deploymentParams.Add("placeholderWorkerImage=$PlaceholderWorkerImage") | Out-Null
+    }
+
     # Add cosmosLocation parameter if specified
     if ($CosmosLocation) { $deploymentParams.Add("cosmosLocation=$CosmosLocation") | Out-Null }
     if ($AcrLocation)    { $deploymentParams.Add("acrLocation=$AcrLocation") | Out-Null }
@@ -191,6 +205,9 @@ try {
     if ($useExistingCosmos) {
         Write-Host " - Existing Cosmos Account: $ExistingCosmosResourceGroup/$ExistingCosmosAccountName" -ForegroundColor Gray
         Write-Host " - Existing Cosmos Database: $ExistingCosmosDatabaseName" -ForegroundColor Gray
+    }
+    if ($UsePlaceholderImages.IsPresent) {
+        Write-Host " - Using placeholder images: API='$PlaceholderApiImage', Worker='$PlaceholderWorkerImage'" -ForegroundColor Gray
     }
 
     # Run what-if if requested

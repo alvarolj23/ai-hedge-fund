@@ -57,13 +57,20 @@ Use `infra/scripts/deploy-infrastructure.ps1` to compile the Bicep template and 
     -SubscriptionId "a604d967-963b-4ff5-acb7-f0aaec811978" `
     -ResourceGroupName "rg-ai-hedge-fund" `
     -NamePrefix "hedgefund" `
-    -Location "westeurope" `
-    -CosmosLocation "northeurope" `
-    -AcrSku "Standard" `
-    -AcrLocation "northeurope"
+    -ExistingAcrResourceGroup "rg-crypto-analysis-prod" `
+    -ExistingAcrName "acrcryptoanalysisprodrelfwcuoc4lf6" `
+    -ExistingAcrUsername "acrcryptoanalysisprodrelfwcuoc4lf6" `
+    -ExistingAcrPassword "" `
+    -ExistingCosmosResourceGroup "rg-crypto-analysis-prod" `
+    -ExistingCosmosAccountName "cosmos-cryptoanalysis-prod-relfwcuoc4lf6" `
+    -ExistingCosmosDatabaseName "cosmos-cryptoanalysis-prod-relfwcuoc4lf6" `
+    -UsePlaceholderImages #Only the first time if needed because no image is present
+
 ```
 
 Optional: append `-WhatIf` to preview the changes without creating resources.
+
+> **Why placeholder images?** During the very first deployment your Container Apps will reference image tags that may not exist yet in ACR. Passing `-UsePlaceholderImages` tells the Bicep template to point at a lightweight public container so the resources can provision successfully. As soon as you run the publish step, the container apps are switched to your real images. On subsequent infrastructure updates (after the real images exist) you can omit `-UsePlaceholderImages`.
 
 On success the script prints the key resource names (registry, container app, job, function app, etc.) and stores every output in `infra/scripts/latest-deployment.json`.
 
