@@ -38,25 +38,31 @@ jobs:
 
       - name: Write deployment config from secret
         shell: bash
+        env:
+          DEPLOYMENT_CONFIG_SECRET: ${{ secrets.DEPLOYMENT_CONFIG }}
         run: |
-          if [ -n "${{ secrets.DEPLOYMENT_CONFIG }}" ]; then
-            mkdir -p infra/scripts
-            # Use printf to preserve the exact content of the secret (safer than echo)
-            printf '%s' "${{ secrets.DEPLOYMENT_CONFIG }}" > infra/scripts/deployment-settings.json
+          set -euo pipefail
 
-            # Validate JSON was written correctly. This will fail the job with a helpful message
-            # if the secret's content is not valid JSON. We intentionally do NOT print the
-            # secret contents to logs to avoid leaking secrets.
-            # Validate JSON was written correctly. Fail with a clear message if invalid.
-            if ! python -m json.tool infra/scripts/deployment-settings.json >/dev/null 2>&1; then
-              echo "ERROR: DEPLOYMENT_CONFIG secret produced invalid JSON when written to infra/scripts/deployment-settings.json" >&2
-              # Try to print a short diagnostic using jq if available (won't print secret raw if it's valid JSON)
-              if command -v jq >/dev/null 2>&1; then
-                echo "jq parse error:" >&2
-                jq . infra/scripts/deployment-settings.json >/dev/null 2>&1 || true
+          if [ -n "${DEPLOYMENT_CONFIG_SECRET:-}" ]; then
+            mkdir -p infra/scripts
+            raw_path="infra/scripts/deployment-settings.raw"
+            final_path="infra/scripts/deployment-settings.json"
+
+            # Use printf to preserve exact content of the secret (no interpretation of escapes)
+            printf '%s' "${DEPLOYMENT_CONFIG_SECRET}" > "$raw_path"
+
+            if python infra/scripts/sanitize_deployment_config.py "$raw_path" "$final_path"; then
+              if python -m json.tool "$final_path" >/dev/null 2>&1; then
+                echo "Deployment config JSON is valid after sanitation checks"
               else
-                echo "JSON parse failed (python -m json.tool)." >&2
+                rm -f "$raw_path" "$final_path"
+                echo "ERROR: Sanitized deployment config failed final JSON validation" >&2
+                exit 1
               fi
+            else
+              rm -f "$raw_path"
+              echo "ERROR: DEPLOYMENT_CONFIG secret produced invalid JSON even after cleanup attempts." >&2
+              echo "Ensure the secret contains valid JSON or base64-encoded JSON matching infra/scripts/deployment-settings.json." >&2
               exit 1
             fi
           fi
