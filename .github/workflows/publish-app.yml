@@ -41,7 +41,24 @@ jobs:
         run: |
           if [ -n "${{ secrets.DEPLOYMENT_CONFIG }}" ]; then
             mkdir -p infra/scripts
-            echo "${{ secrets.DEPLOYMENT_CONFIG }}" > infra/scripts/deployment-settings.json
+            # Use printf to preserve the exact content of the secret (safer than echo)
+            printf '%s' "${{ secrets.DEPLOYMENT_CONFIG }}" > infra/scripts/deployment-settings.json
+
+            # Validate JSON was written correctly. This will fail the job with a helpful message
+            # if the secret's content is not valid JSON. We intentionally do NOT print the
+            # secret contents to logs to avoid leaking secrets.
+            # Validate JSON was written correctly. Fail with a clear message if invalid.
+            if ! python -m json.tool infra/scripts/deployment-settings.json >/dev/null 2>&1; then
+              echo "ERROR: DEPLOYMENT_CONFIG secret produced invalid JSON when written to infra/scripts/deployment-settings.json" >&2
+              # Try to print a short diagnostic using jq if available (won't print secret raw if it's valid JSON)
+              if command -v jq >/dev/null 2>&1; then
+                echo "jq parse error:" >&2
+                jq . infra/scripts/deployment-settings.json >/dev/null 2>&1 || true
+              else
+                echo "JSON parse failed (python -m json.tool)." >&2
+              fi
+              exit 1
+            fi
           fi
 
       - name: Sign in to Azure
