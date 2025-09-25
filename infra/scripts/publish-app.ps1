@@ -159,18 +159,37 @@ if ($ConfigPath) {
 }
 
 $functionSource = Join-Path $repoRoot 'infra/monitoring'
+$srcPath = Join-Path $repoRoot 'src'
 $packagePath = Join-Path $scriptRoot 'functionapp.zip'
+$stagingPath = Join-Path $scriptRoot 'functionapp_staging'
+
 if (Test-Path $packagePath) {
     Remove-Item $packagePath -Force
 }
+if (Test-Path $stagingPath) {
+    Remove-Item $stagingPath -Force -Recurse
+}
+New-Item -ItemType Directory -Path $stagingPath | Out-Null
 
 Write-Host "Packaging Azure Function from $functionSource" -ForegroundColor Cyan
-Push-Location $functionSource
+Copy-Item -Path (Join-Path $functionSource '*') -Destination $stagingPath -Recurse -Force
+
+if (Test-Path $srcPath) {
+    Write-Host "Including src/ directory for shared modules" -ForegroundColor Gray
+    Copy-Item -Path $srcPath -Destination (Join-Path $stagingPath 'src') -Recurse -Force
+}
+else {
+    Write-Warning "Source directory '$srcPath' not found; function package will not include shared modules."
+}
+
+Push-Location $stagingPath
 Compress-Archive -Path * -DestinationPath $packagePath -Force
 Pop-Location
 
+Remove-Item $stagingPath -Recurse -Force
+
 Write-Host "Deploying monitoring Function App '$functionAppName'" -ForegroundColor Cyan
-az functionapp deployment source config-zip --name $functionAppName --resource-group $ResourceGroupName --src $packagePath | Out-Null
+az functionapp deployment source config-zip --name $functionAppName --resource-group $ResourceGroupName --src $packagePath --build-remote true | Out-Null
 
 if ($ConfigPath -and (Test-Path $ConfigPath)) {
     $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json -Depth 5
