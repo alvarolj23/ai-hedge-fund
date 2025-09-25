@@ -13,7 +13,17 @@ import azure.functions as func
 from azure.cosmos import CosmosClient, PartitionKey, exceptions as cosmos_exceptions
 from azure.storage.queue import QueueClient
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+def _detect_repo_root() -> Path:
+    current_path = Path(__file__).resolve()
+    for parent in current_path.parents:
+        src_dir = parent / "src"
+        if src_dir.exists():
+            return parent
+    # Fallback to the directory that contains this module if src is not found
+    return current_path.parent
+
+
+REPO_ROOT = _detect_repo_root()
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
