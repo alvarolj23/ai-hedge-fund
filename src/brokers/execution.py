@@ -1,4 +1,4 @@
-"""Trading execution helpers built on top of broker adapters."""
+"""Trading execution helpers built on top of broker adapters (alpaca-py)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ from pydantic import ValidationError
 from src.agents.portfolio_manager import PortfolioDecision
 from src.persistence import CosmosOrderStore
 
-from .alpaca import BrokerOrder, PaperBroker
+# ⬇️ NEW: use the alpaca-py powered broker
+# If your broker module lives next to this file, you can also do: from .alpaca_paper_broker import ...
+from src.brokers.alpaca import BrokerOrder, PaperBroker
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,18 @@ def extract_risk_limits(analyst_signals: Dict[str, Any]) -> Dict[str, Dict[str, 
             if isinstance(details, dict):
                 limits[ticker] = details
     return limits
+
+
+def _side_str_from_action(action: str) -> str:
+    """
+    Map your decision 'action' -> side string compatible with persisted records.
+    PaperBroker.ACTION_TO_SIDE returns an enum (alpaca-py), so normalize to str.
+    """
+    side_enum_or_str = PaperBroker.ACTION_TO_SIDE.get(action.lower())
+    if side_enum_or_str is None:
+        return "unknown"
+    # alpaca-py enums expose .value ("buy"/"sell"); if a string is stored, return as-is.
+    return getattr(side_enum_or_str, "value", side_enum_or_str)
 
 
 def dispatch_paper_orders(
@@ -92,7 +106,7 @@ def dispatch_paper_orders(
                 ticker=ticker,
                 action=decision.action,
                 quantity=allowed_quantity,
-                side=PaperBroker.ACTION_TO_SIDE.get(action, "unknown"),
+                side=_side_str_from_action(action),
                 status="error",
                 error=str(exc),
             )
