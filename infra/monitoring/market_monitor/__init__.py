@@ -257,8 +257,30 @@ def _compose_queue_payload(
     return payload
 
 
+def _format_schedule_status(timer: func.TimerRequest | None) -> str:
+    if not timer:
+        return "unknown"
+
+    status = getattr(timer, "schedule_status", None)
+    if not status:
+        return "unknown"
+
+    if isinstance(status, dict):
+        for key in ("last", "Last", "lastUpdated", "LastUpdated"):
+            if key in status and status[key]:
+                return str(status[key])
+        return "unknown"
+
+    for attr in ("last", "Last", "last_updated", "LastUpdated"):
+        value = getattr(status, attr, None)
+        if value:
+            return str(value)
+
+    return "unknown"
+
+
 def main(market_timer: func.TimerRequest) -> None:
-    logging.info("Market monitor timer triggered at %s", market_timer.schedule_status.last if market_timer and market_timer.schedule_status else "unknown")
+    logging.info("Market monitor timer triggered at %s", _format_schedule_status(market_timer))
 
     now_utc = dt.datetime.now(dt.timezone.utc)
     if not _is_market_hours(now_utc):
