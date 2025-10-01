@@ -69,3 +69,9 @@ app/backend/alembic/versions/__pycache__/
 
 # deployment settings (keep template, ignore actual settings)
 infra/scripts/deployment-settings.json
+
+# local settings for Azure Functions (keep template, ignore actual settings)
+infra/monitoring/local.settings.json
+
+# venv function app
+infra/monitoring/.venv/
