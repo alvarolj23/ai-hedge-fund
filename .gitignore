@@ -29,7 +29,7 @@ ENV/
 
 # IDE
 .idea/
-.vscode/
+
 *.swp
 *.swo
 .cursorrules
@@ -75,3 +75,7 @@ infra/monitoring/local.settings.json
 
 # venv function app
 infra/monitoring/.venv/
+
+#.vscode/
+.vscode/
+
