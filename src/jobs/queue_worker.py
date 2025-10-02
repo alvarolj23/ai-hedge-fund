@@ -170,29 +170,29 @@ class QueueWorker:
             return
 
         logger.info("Processing message %s", message.id)
+        
+        # Delete message immediately to prevent reprocessing
+        # This ensures it only executes once, even if processing fails
+        self._delete_message(message)
+        
         try:
             payload = self._parse_message(message)
         except PoisonMessageError as exc:
             logger.error("Poison message detected: %s", exc)
             self._dead_letter(message, reason=str(exc))
-            self._delete_message(message)
             return
 
         try:
             self._process_with_retries(message, payload)
+            logger.info("Message %s processed successfully", message.id)
         except PoisonMessageError as exc:
             logger.error("Poison message after validation: %s", exc)
             self._dead_letter(message, reason=str(exc))
-            self._delete_message(message)
             return
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.exception("Failed to process message %s: %s", message.id, exc)
             self._dead_letter(message, reason=f"processing_error: {exc}")
-            self._delete_message(message)
             return
-
-        self._delete_message(message)
-        logger.info("Message %s processed successfully", message.id)
 
     def _receive_message(self) -> Optional[QueueMessage]:
         return self._execute_with_backoff(
@@ -280,35 +280,7 @@ class QueueWorker:
         }
 
     def _process_with_retries(self, message: QueueMessage, payload: Dict[str, Any]) -> None:
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                self._process_message(message, payload)
-                return
-            except PoisonMessageError:
-                raise
-            except self.RETRYABLE_EXCEPTIONS as exc:
-                if attempt >= self.config.max_attempts:
-                    logger.error(
-                        "Exceeded retry limit (%s) for message %s due to transient error: %s",
-                        self.config.max_attempts,
-                        message.id,
-                        exc,
-                    )
-                    raise
-                delay = self._compute_backoff(attempt)
-                logger.warning(
-                    "Transient error processing message %s (attempt %s/%s): %s. Retrying in %.2fs",
-                    message.id,
-                    attempt,
-                    self.config.max_attempts,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-            except Exception:
-                raise
+        self._process_message(message, payload)
 
     def _process_message(self, message: QueueMessage, payload: Dict[str, Any]) -> None:
         portfolio_snapshot = self.repository.get_latest_portfolio_snapshot()
