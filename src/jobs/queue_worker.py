@@ -208,8 +208,8 @@ class QueueWorker:
             self._dead_letter(message, reason=str(exc))
             return True
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.exception("Failed to process message %s: %s", message.id, exc)
-            self._dead_letter(message, reason=f"processing_error: {exc}")
+            logger.exception("Failed to process message %s", message.id)
+            self._dead_letter(message, reason=f"processing_error: {type(exc).__name__}")
             return True
 
     def _receive_message(self) -> Optional[QueueMessage]:
