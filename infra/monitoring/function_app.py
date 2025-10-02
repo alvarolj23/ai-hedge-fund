@@ -280,9 +280,14 @@ def market_monitor(market_timer: func.TimerRequest) -> None:
     logging.info("Market monitor timer triggered at %s", _format_schedule_status(market_timer))
 
     now_utc = dt.datetime.now(dt.timezone.utc)
+    eastern_now = now_utc.astimezone(EASTERN)
+    logging.info("Current time - UTC: %s, ET: %s, Day of week: %d", now_utc, eastern_now, eastern_now.weekday())
+    
     if not _is_market_hours(now_utc):
         logging.info("Outside market hours - skipping execution")
         return
+    
+    logging.info("Within market hours - proceeding with monitoring")
 
     watchlist_env = (
         os.getenv("MARKET_MONITOR_WATCHLIST")
@@ -318,16 +323,33 @@ def market_monitor(market_timer: func.TimerRequest) -> None:
     start_date = (today_eastern - dt.timedelta(days=history_days)).isoformat()
     end_date = today_eastern.isoformat()
 
+    logging.info("Monitoring %d tickers: %s (date range: %s to %s)", 
+                 len(watchlist), watchlist, start_date, end_date)
+    logging.info("Thresholds - Price change: %.2f%%, Volume multiplier: %.1fx, Cooldown: %ds",
+                 percent_threshold * 100, volume_multiplier, cooldown_seconds)
+
     for ticker in watchlist:
+        logging.info("Processing ticker: %s", ticker)
         try:
             prices = _fetch_price_history(ticker, start_date, end_date)
+            logging.info("Fetched %d price records for %s", len(prices), ticker)
         except Exception as exc:  # noqa: BLE001 - log and continue on data failure
             logging.exception("Failed to fetch prices for %s: %s", ticker, exc)
             continue
 
         summary = _evaluate_signals(ticker, prices, percent_threshold, volume_multiplier, volume_window)
-        if not summary or not summary.triggered:
+        if not summary:
+            logging.info("No summary generated for %s (insufficient data)", ticker)
             continue
+            
+        if not summary.triggered:
+            logging.info("%s: No signals triggered (change: %.2f%%, vol ratio: %s)", 
+                        ticker, summary.percent_change * 100, 
+                        f"{summary.volume_ratio:.2f}x" if summary.volume_ratio else "N/A")
+            continue
+
+        logging.info("%s: SIGNALS DETECTED - %s (change: %.2f%%, vol ratio: %.2fx)", 
+                    ticker, summary.reasons, summary.percent_change * 100, summary.volume_ratio or 0)
 
         last_trigger = cooldown_store.get_last_trigger(ticker)
         if last_trigger and now_utc - last_trigger < cooldown_window:
@@ -337,7 +359,9 @@ def market_monitor(market_timer: func.TimerRequest) -> None:
         payload = _compose_queue_payload(ticker, now_utc, analysis_window_minutes, summary, watchlist)
         try:
             queue_client.send_message(json.dumps(payload))
-            logging.info("Enqueued analysis request for %s with reasons %s", ticker, summary.reasons)
+            logging.info("✓ Enqueued analysis request for %s with reasons %s", ticker, summary.reasons)
             cooldown_store.upsert_trigger(ticker, now_utc, summary.reasons)
         except Exception as exc:  # noqa: BLE001 - surface queue issues
             logging.exception("Failed to enqueue analysis for %s: %s", ticker, exc)
+    
+    logging.info("Market monitor execution completed")
