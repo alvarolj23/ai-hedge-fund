@@ -1,10 +1,12 @@
+"""
+Azure Functions App - Market Monitoring
+Uses Python v2 programming model with decorators
+"""
 import datetime as dt
 import json
 import logging
 import os
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 from statistics import mean
 from typing import Iterable, Sequence
 from zoneinfo import ZoneInfo
@@ -13,25 +15,15 @@ import azure.functions as func
 from azure.cosmos import CosmosClient, PartitionKey, exceptions as cosmos_exceptions
 from azure.storage.queue import QueueClient
 
-def _detect_repo_root() -> Path:
-    current_path = Path(__file__).resolve()
-    for parent in current_path.parents:
-        src_dir = parent / "src"
-        if src_dir.exists():
-            return parent
-    # Fallback to the directory that contains this module if src is not found
-    return current_path.parent
-
-
-REPO_ROOT = _detect_repo_root()
-if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))
-
-from src.data.models import Price  # noqa: E402
-from src.tools.api import get_prices  # noqa: E402
+# Import local modules (no external src dependencies)
+from models import Price
+from api_client import get_prices
 
 
 EASTERN = ZoneInfo("America/New_York")
+
+# Initialize the Azure Functions app
+app = func.FunctionApp()
 
 
 @dataclass
@@ -279,7 +271,12 @@ def _format_schedule_status(timer: func.TimerRequest | None) -> str:
     return "unknown"
 
 
-def main(market_timer: func.TimerRequest) -> None:
+@app.timer_trigger(schedule="0 */5 * * * *", arg_name="market_timer", run_on_startup=False, use_monitor=False)
+def market_monitor(market_timer: func.TimerRequest) -> None:
+    """
+    Market monitoring timer function.
+    Runs every 5 minutes during market hours to detect price breakouts and volume spikes.
+    """
     logging.info("Market monitor timer triggered at %s", _format_schedule_status(market_timer))
 
     now_utc = dt.datetime.now(dt.timezone.utc)
@@ -344,4 +341,3 @@ def main(market_timer: func.TimerRequest) -> None:
             cooldown_store.upsert_trigger(ticker, now_utc, summary.reasons)
         except Exception as exc:  # noqa: BLE001 - surface queue issues
             logging.exception("Failed to enqueue analysis for %s: %s", ticker, exc)
-

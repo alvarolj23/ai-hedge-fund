@@ -28,22 +28,10 @@ try {
 
     # Copy function app files
     Write-Host "  + Copying function app files..." -ForegroundColor Gray
-    Copy-Item -Path "$MonitoringDir\*" -Destination $TempDir -Recurse -Force -Exclude @('.venv', '__pycache__', '.vscode', 'local.settings.json', '*.md')
+    Copy-Item -Path "$MonitoringDir\*" -Destination $TempDir -Recurse -Force -Exclude @('.venv', '__pycache__', '.vscode', 'local.settings.json', '*.md', 'market_monitor')
 
-    # Copy necessary src modules
-    Write-Host "  + Copying src dependencies..." -ForegroundColor Gray
-    $TempSrcDir = Join-Path $TempDir "src"
-    New-Item -ItemType Directory -Path $TempSrcDir -Force | Out-Null
-    New-Item -ItemType Directory -Path "$TempSrcDir\data" -Force | Out-Null
-    New-Item -ItemType Directory -Path "$TempSrcDir\tools" -Force | Out-Null
-
-    # Copy only required files
-    Copy-Item -Path "$SrcDir\__init__.py" -Destination "$TempSrcDir\__init__.py" -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path "$SrcDir\data\__init__.py" -Destination "$TempSrcDir\data\__init__.py" -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path "$SrcDir\data\models.py" -Destination "$TempSrcDir\data\models.py" -Force
-    Copy-Item -Path "$SrcDir\data\cache.py" -Destination "$TempSrcDir\data\cache.py" -Force
-    Copy-Item -Path "$SrcDir\tools\__init__.py" -Destination "$TempSrcDir\tools\__init__.py" -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path "$SrcDir\tools\api.py" -Destination "$TempSrcDir\tools\api.py" -Force
+    # No need to copy src files anymore - function_app.py is now self-contained
+    Write-Host "  + Function app is self-contained (no external src dependencies)" -ForegroundColor Gray
 
     # Create deployment package
     $ZipFile = Join-Path $env:TEMP "function-app-$(Get-Date -Format 'yyyyMMddHHmmss').zip"
