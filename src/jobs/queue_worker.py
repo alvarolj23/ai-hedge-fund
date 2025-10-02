@@ -170,29 +170,29 @@ class QueueWorker:
             return
 
         logger.info("Processing message %s", message.id)
+        
+        # Delete message immediately to prevent reprocessing
+        # This ensures it only executes once, even if processing fails
+        self._delete_message(message)
+        
         try:
             payload = self._parse_message(message)
         except PoisonMessageError as exc:
             logger.error("Poison message detected: %s", exc)
             self._dead_letter(message, reason=str(exc))
-            self._delete_message(message)
             return
 
         try:
             self._process_with_retries(message, payload)
+            logger.info("Message %s processed successfully", message.id)
         except PoisonMessageError as exc:
             logger.error("Poison message after validation: %s", exc)
             self._dead_letter(message, reason=str(exc))
-            self._delete_message(message)
             return
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.exception("Failed to process message %s: %s", message.id, exc)
             self._dead_letter(message, reason=f"processing_error: {exc}")
-            self._delete_message(message)
             return
-
-        self._delete_message(message)
-        logger.info("Message %s processed successfully", message.id)
 
     def _receive_message(self) -> Optional[QueueMessage]:
         return self._execute_with_backoff(

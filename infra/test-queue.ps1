@@ -11,8 +11,11 @@ param(
     [Parameter(HelpMessage="Name of the queue to send the message to")]
     [string]$QueueName = 'analysis-requests',
 
-    [Parameter(HelpMessage="JSON message content to send to the queue")]
-    [string]$Message = '{"action": "analyze", "symbol": "AAPL", "timestamp": "' + (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ") + '"}'
+    [Parameter(HelpMessage="Ticker symbols to analyze (comma-separated)")]
+    [string]$Tickers = 'AAPL',
+
+    [Parameter(HelpMessage="Number of days to look back for analysis")]
+    [int]$LookbackDays = 30
 )
 
 # Ensure Azure CLI is logged in
@@ -31,13 +34,42 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# Build the message payload matching the queue_worker.py expected format
+$now = (Get-Date).ToUniversalTime()
+$endDate = $now.ToString("yyyy-MM-ddTHH:mm:ss+00:00")
+$startDate = $now.AddDays(-$LookbackDays).ToString("yyyy-MM-ddTHH:mm:ss+00:00")
+
+# Parse tickers into an array
+$tickerArray = $Tickers -split ',' | ForEach-Object { $_.Trim() }
+
+$messagePayload = @{
+    tickers = $tickerArray
+    analysis_window = @{
+        start = $startDate
+        end = $endDate
+    }
+    overrides = @{
+        show_reasoning = $true
+    }
+    triggered_at = $now.ToString("yyyy-MM-ddTHH:mm:ss+00:00")
+    source = "manual_test"
+} | ConvertTo-Json -Compress
+
+Write-Host "Message payload:"
+Write-Host $messagePayload
+Write-Host ""
+
+# Base64 encode the message (required for Azure Queue Storage with TextBase64EncodePolicy)
+$messageBytes = [System.Text.Encoding]::UTF8.GetBytes($messagePayload)
+$base64Message = [Convert]::ToBase64String($messageBytes)
+
 # Send the message to the queue
 Write-Host "Sending message to queue '$QueueName' in storage account '$StorageAccountName'..."
 az storage message put `
     --queue-name $QueueName `
     --account-name $StorageAccountName `
     --account-key $keyJson `
-    --content $Message
+    --content $base64Message
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Message sent successfully. The container app job should trigger shortly."
