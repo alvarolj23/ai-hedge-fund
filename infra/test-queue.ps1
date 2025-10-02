@@ -36,40 +36,40 @@ if ($LASTEXITCODE -ne 0) {
 
 # Build the message payload matching the queue_worker.py expected format
 $now = (Get-Date).ToUniversalTime()
-$endDate = $now.ToString("yyyy-MM-ddTHH:mm:ss+00:00")
-$startDate = $now.AddDays(-$LookbackDays).ToString("yyyy-MM-ddTHH:mm:ss+00:00")
 
-# Parse tickers into an array
-$tickerArray = $Tickers -split ',' | ForEach-Object { $_.Trim() }
+# Parse tickers into an array - ensure it's always an array even with single item
+$tickerArray = @($Tickers -split ',' | ForEach-Object { $_.Trim() })
 
 $messagePayload = @{
-    tickers = $tickerArray
-    analysis_window = @{
-        start = $startDate
-        end = $endDate
-    }
+    lookback_days = $LookbackDays
     overrides = @{
         show_reasoning = $true
     }
     triggered_at = $now.ToString("yyyy-MM-ddTHH:mm:ss+00:00")
     source = "manual_test"
-} | ConvertTo-Json -Compress
+}
+
+if ($tickerArray.Count -le 1) {
+    $messagePayload["ticker"] = $tickerArray[0]
+} else {
+    $messagePayload["tickers"] = $tickerArray
+}
+
+$messagePayload = $messagePayload | ConvertTo-Json -Compress -Depth 10
 
 Write-Host "Message payload:"
 Write-Host $messagePayload
 Write-Host ""
 
-# Base64 encode the message (required for Azure Queue Storage with TextBase64EncodePolicy)
-$messageBytes = [System.Text.Encoding]::UTF8.GetBytes($messagePayload)
-$base64Message = [Convert]::ToBase64String($messageBytes)
-
 # Send the message to the queue
+# NOTE: Do NOT manually base64 encode - Azure Storage Queue handles this automatically
+# when the queue_worker uses TextBase64EncodePolicy/DecodePolicy
 Write-Host "Sending message to queue '$QueueName' in storage account '$StorageAccountName'..."
 az storage message put `
     --queue-name $QueueName `
     --account-name $StorageAccountName `
     --account-key $keyJson `
-    --content $base64Message
+    --content $messagePayload
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Message sent successfully. The container app job should trigger shortly."

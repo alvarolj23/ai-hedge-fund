@@ -9,15 +9,16 @@ import random
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Iterable, Optional
 
 from dotenv import load_dotenv
 
 try:  # pragma: no cover - imported lazily for environments without Azure SDK
     from azure.core.exceptions import AzureError, ResourceExistsError, ServiceRequestError, ServiceResponseError
-    from azure.storage.queue import QueueClient, TextBase64DecodePolicy, TextBase64EncodePolicy
+    from azure.storage.queue import QueueClient, TextBase64EncodePolicy
     from azure.storage.queue._models import QueueMessage
+    from azure.storage.queue._message_encoding import DecodeError, TextBase64DecodePolicy
     try:
         from azure.cosmos.exceptions import CosmosHttpResponseError
     except ImportError:  # pragma: no cover
@@ -38,6 +39,18 @@ logger = logging.getLogger(__name__)
 
 class PoisonMessageError(Exception):
     """Raised when a queue message cannot be processed and should be dead-lettered."""
+
+
+class FlexibleTextDecodePolicy(TextBase64DecodePolicy):
+    """Decode queue messages encoded as base64 while tolerating plain text payloads."""
+
+    def decode(self, content, response):  # type: ignore[override]
+        try:
+            return super().decode(content, response)
+        except DecodeError:
+            # Messages pushed via CLI or other tooling may already be plain JSON.
+            # Fall back to the raw content so we can still process them.
+            return content
 
 
 @dataclass(slots=True)
@@ -127,7 +140,7 @@ class QueueWorker:
         account_url = f"https://{config.account}.queue.core.windows.net"
 
         encode_policy = TextBase64EncodePolicy()
-        decode_policy = TextBase64DecodePolicy()
+        decode_policy = FlexibleTextDecodePolicy()
 
         queue_client = QueueClient(
             account_url=account_url,
@@ -161,13 +174,17 @@ class QueueWorker:
             config=config,
         )
 
-    def run(self) -> None:
-        """Receive and process a single queue message."""
+    def run(self) -> bool:
+        """Receive and process a single queue message.
+
+        Returns:
+            True if a message was processed, False if no messages were available.
+        """
 
         message = self._receive_message()
         if message is None:
             logger.info("No messages available on queue '%s'", self.config.queue_name)
-            return
+            return False
 
         logger.info("Processing message %s", message.id)
         
@@ -180,19 +197,20 @@ class QueueWorker:
         except PoisonMessageError as exc:
             logger.error("Poison message detected: %s", exc)
             self._dead_letter(message, reason=str(exc))
-            return
+            return True
 
         try:
             self._process_with_retries(message, payload)
             logger.info("Message %s processed successfully", message.id)
+            return True
         except PoisonMessageError as exc:
             logger.error("Poison message after validation: %s", exc)
             self._dead_letter(message, reason=str(exc))
-            return
+            return True
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.exception("Failed to process message %s: %s", message.id, exc)
             self._dead_letter(message, reason=f"processing_error: {exc}")
-            return
+            return True
 
     def _receive_message(self) -> Optional[QueueMessage]:
         return self._execute_with_backoff(
@@ -244,35 +262,64 @@ class QueueWorker:
 
     def _parse_message(self, message: QueueMessage) -> Dict[str, Any]:
         try:
-            payload = json.loads(message.content)
+            content = message.content
+            if not isinstance(content, str):
+                raise PoisonMessageError("Queue message content must be text")
+            payload = json.loads(content)
         except json.JSONDecodeError as exc:  # pragma: no cover - defensive programming
             raise PoisonMessageError("Message content is not valid JSON") from exc
 
         if not isinstance(payload, dict):
             raise PoisonMessageError("Queue message payload must be a JSON object")
 
-        tickers = payload.get("tickers")
-        if not tickers or not isinstance(tickers, Iterable) or isinstance(tickers, (str, bytes)):
-            raise PoisonMessageError("Queue message is missing a list of 'tickers'")
-        tickers = [ticker.strip() for ticker in tickers if str(ticker).strip()]
+        tickers: Iterable[Any] | None = payload.get("tickers")
+        if isinstance(tickers, (str, bytes)):
+            tickers = [tickers]
+
         if not tickers:
+            ticker = payload.get("ticker") or payload.get("symbol") or payload.get("asset")
+            if ticker:
+                tickers = [ticker]
+
+        if not tickers:
+            raise PoisonMessageError("Queue message must include 'tickers' or a single 'ticker'/'symbol'")
+
+        normalised_tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
+        if not normalised_tickers:
             raise PoisonMessageError("Queue message included an empty ticker list")
 
-        analysis_window = payload.get("analysis_window") or {}
-        if not isinstance(analysis_window, dict):
-            raise PoisonMessageError("'analysis_window' must be a JSON object with start/end dates")
+        analysis_window = payload.get("analysis_window") if isinstance(payload.get("analysis_window"), dict) else {}
 
-        start_date = analysis_window.get("start") or analysis_window.get("start_date")
-        end_date = analysis_window.get("end") or analysis_window.get("end_date")
+        start_date = (
+            analysis_window.get("start")
+            or analysis_window.get("start_date")
+            or payload.get("start")
+            or payload.get("start_date")
+        )
+        end_date = (
+            analysis_window.get("end")
+            or analysis_window.get("end_date")
+            or payload.get("end")
+            or payload.get("end_date")
+        )
+
         if not (start_date and end_date):
-            raise PoisonMessageError("'analysis_window' must contain 'start'/'end' or 'start_date'/'end_date'")
+            lookback_days = payload.get("lookback_days") or payload.get("lookback") or os.getenv("QUEUE_DEFAULT_LOOKBACK_DAYS", "30")
+            try:
+                lookback_days_int = int(lookback_days)
+            except (TypeError, ValueError):
+                lookback_days_int = 30
+
+            now = datetime.now(timezone.utc)
+            start_date = (now - timedelta(days=lookback_days_int)).isoformat()
+            end_date = now.isoformat()
 
         overrides = payload.get("overrides") or {}
         if overrides and not isinstance(overrides, dict):
             raise PoisonMessageError("'overrides' must be a JSON object when provided")
 
         return {
-            "tickers": tickers,
+            "tickers": normalised_tickers,
             "start_date": start_date,
             "end_date": end_date,
             "overrides": overrides,
