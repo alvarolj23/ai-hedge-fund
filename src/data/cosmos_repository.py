@@ -118,8 +118,35 @@ class CosmosRepository:
             raise
 
         if not items:
-            raise RuntimeError("No portfolio snapshots found in Cosmos DB")
+            # Return a default empty portfolio snapshot if none exists
+            logger.warning("No portfolio snapshots found in Cosmos DB. Returning default empty portfolio.")
+            return {
+                "id": "default-empty-portfolio",
+                "portfolio": {
+                    "positions": {},
+                    "total_cash": 100000.0,  # Default starting cash
+                },
+                "_ts": int(datetime.now(timezone.utc).timestamp()),
+            }
         return items[0]
+
+    def save_portfolio_snapshot(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update a portfolio snapshot in Cosmos."""
+
+        record = dict(snapshot)
+        record.setdefault("id", f"portfolio-{int(datetime.now(timezone.utc).timestamp())}")
+        record.setdefault("updatedAt", datetime.now(timezone.utc).isoformat())
+
+        if self._use_stub:
+            self._stub_snapshot = record
+            return record
+
+        try:  # pragma: no cover - requires Cosmos DB
+            self._snapshot_container.upsert_item(record)
+        except CosmosHttpResponseError as exc:
+            logger.error("Failed to upsert portfolio snapshot: %s", exc)
+            raise
+        return record
 
     # Run results ---------------------------------------------------------
     def save_run_result(self, message_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:

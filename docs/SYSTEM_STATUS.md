@@ -62,7 +62,7 @@ The AI Hedge Fund is a multi-agent trading system that monitors markets, perform
 
 ---
 
-### 2. **Analysis Phase** ⚠️ PARTIALLY WORKING
+### 2. **Analysis Phase** ✅ WORKING (Updated: Oct 2025)
 
 **Component:** Container App Job (`src/jobs/queue_worker.py`)
 
@@ -72,21 +72,36 @@ The AI Hedge Fund is a multi-agent trading system that monitors markets, perform
 1. ✅ Polls `analysis-requests` queue for new messages
 2. ✅ Deletes message immediately (ensures single execution)
 3. ✅ Validates message payload structure
-4. ✅ Fetches latest portfolio snapshot from Cosmos DB
+4. ✅ **NEW: Fetches live portfolio from Alpaca Paper Trading API** (replaces Cosmos DB)
 5. ✅ Calls `run_hedge_fund()` to orchestrate multi-agent analysis
-6. ✅ Saves results to Cosmos DB (`hedgeFundResults` container)
-7. ✅ Publishes status to Cosmos DB (`hedgeFundStatus` container)
-8. ❌ **NOT YET:** Does not trigger Alpaca trading execution
+6. ✅ **Optional:** Saves results to Cosmos DB (configurable via `SAVE_TO_COSMOS`)
+7. ✅ **Optional:** Publishes status to Cosmos DB
+8. ✅ **NEW: Executes paper trades via Alpaca** (when `trade_mode=paper`)
 
-**Current Issue (FIXED):**
-- ~~Message parsing was failing due to double base64 encoding~~
-- Fixed in `test-queue.ps1` - now sends plain JSON (Azure handles encoding)
+**Portfolio Source:**
+- **Primary:** Alpaca Paper Trading API (real-time positions, cash, buying power)
+- **Legacy:** Cosmos DB portfolioSnapshots (disabled by default, set `USE_ALPACA_PORTFOLIO=false` to enable)
+
+**Configuration:**
+```bash
+USE_ALPACA_PORTFOLIO=true    # Fetch from Alpaca (default)
+SAVE_TO_COSMOS=false         # Skip Cosmos persistence (default)
+```
+
+**Current Status:**
+- ✅ Alpaca integration working
+- ⚠️ Requires corporate certificate setup (see `windows_cert_helpers.py`)
+- ✅ Trade execution ready (`trade_mode=paper`)
 
 **Message Validation:**
 The queue worker validates that messages contain:
-- `tickers` (array of strings)
-- `analysis_window` with `start` and `end` dates
-- Optional `overrides` object for configuration
+- `tickers` (array of strings) OR `ticker` (single string)
+- `analysis_window` with `start` and `end` dates OR `lookback_days`
+- Optional `overrides` object:
+  - `trade_mode`: "analysis" (default) or "paper"
+  - `dry_run`: boolean (simulate orders without executing)
+  - `confidence_threshold`: integer (min confidence to execute trades)
+  - `show_reasoning`: boolean
 
 ---
 
@@ -144,29 +159,48 @@ Each analyst contributes a signal with:
 
 ---
 
-### 4. **Trading Execution Phase** ❌ NOT INTEGRATED IN QUEUE WORKER
+### 4. **Trading Execution Phase** ✅ INTEGRATED (Updated: Oct 2025)
 
 **Component:** `src/brokers/execution.py` - `dispatch_paper_orders()`
 
 **Broker:** Alpaca Paper Trading API
 
 **Status:** 
-- ✅ Function exists and works in CLI mode (`python -m src.main --trade-mode paper`)
-- ❌ **NOT called by queue_worker.py**
-- ❌ Queue worker only saves results to Cosmos DB
+- ✅ Function works in both CLI and queue worker
+- ✅ Called automatically when `trade_mode=paper` in queue message
+- ✅ Respects confidence thresholds
+- ✅ Supports dry-run mode for testing
 
-**What's Missing:**
-The queue worker needs to be enhanced to:
-1. Accept `trade_mode` parameter in queue message
-2. Call `dispatch_paper_orders()` after analysis completes
-3. Respect confidence thresholds
-4. Log trade executions to Cosmos DB
+**Portfolio Fetching:**
+- ✅ `src/brokers/portfolio_fetcher.py` - fetches real-time data from Alpaca
+- ✅ Supports long and short positions
+- ✅ Calculates margin usage
+- ✅ Handles corporate certificate chains (Windows environments)
 
-**Required Enhancement:**
-```python
-# In queue_worker.py _process_message():
-if overrides.get("trade_mode") == "paper":
-    from src.brokers import dispatch_paper_orders
+**Trade Modes:**
+1. **Analysis Mode** (default): No trades executed, generates recommendations only
+2. **Paper Mode**: Executes real orders in Alpaca paper account
+3. **Dry Run**: Simulates orders without calling Alpaca API
+
+**Usage in Queue Messages:**
+```json
+{
+  "ticker": "NVDA",
+  "lookback_days": 30,
+  "overrides": {
+    "trade_mode": "paper",
+    "dry_run": false,
+    "confidence_threshold": 70
+  }
+}
+```
+
+**Environment Variables:**
+```bash
+APCA_API_KEY_ID=your_key
+APCA_API_SECRET_KEY=your_secret
+APCA_API_BASE_URL=https://paper-api.alpaca.markets/v2
+```
     
     broker_orders = dispatch_paper_orders(
         decisions=hedge_result.get("decisions"),
@@ -183,14 +217,33 @@ if overrides.get("trade_mode") == "paper":
 
 ## 📊 Data Flow & Persistence
 
-### Cosmos DB Containers
+### Portfolio Source (Updated: Oct 2025)
 
-| Container | Purpose | Partition Key | Document Structure |
-|-----------|---------|---------------|-------------------|
-| `portfolioSnapshots` | Current portfolio state | `/id` | Portfolio positions, cash, margin |
-| `hedgeFundResults` | Full analysis results | `/messageId` | Decisions, analyst signals, metadata |
-| `hedgeFundStatus` | Completion notifications | `/messageId` | Status, summary, timestamp |
-| `cooldownState` | Trigger cooldown tracking | `/ticker` | Last trigger time, reasons |
+**Primary:** Alpaca Paper Trading API
+- Real-time positions (long/short)
+- Available cash and buying power
+- Margin usage and requirements
+- No sync required - always current
+
+**Legacy:** Cosmos DB (Optional)
+- Enable with `USE_ALPACA_PORTFOLIO=false`
+- Requires manual seed data
+- Not recommended for production
+
+### Cosmos DB Containers (Optional - Logging Only)
+
+| Container | Purpose | Partition Key | Document Structure | Status |
+|-----------|---------|---------------|-------------------|--------|
+| `portfolioSnapshots` | Legacy portfolio state | `/id` | Portfolio positions, cash, margin | ⚠️ Optional (Alpaca is primary) |
+| `hedgeFundResults` | Full analysis results | `/messageId` | Decisions, analyst signals, metadata | ✅ Optional logging |
+| `hedgeFundStatus` | Completion notifications | `/messageId` | Status, summary, timestamp | ✅ Optional logging |
+| `cooldownState` | Trigger cooldown tracking | `/ticker` | Last trigger time, reasons | ✅ Used by Azure Function |
+
+**Configuration:**
+```bash
+SAVE_TO_COSMOS=false  # Default: skip Cosmos logging
+SAVE_TO_COSMOS=true   # Enable results logging to Cosmos
+```
 
 ### Azure Storage Queue
 

@@ -69,7 +69,7 @@ def create_queue_client():
     )
 
 
-def send_test_message(tickers, lookback_days=30, show_reasoning=True):
+def send_test_message(tickers, lookback_days=30, show_reasoning=True, trade_mode="analysis", dry_run=False):
     """Send a test message to the queue."""
     client = create_queue_client()
 
@@ -79,7 +79,9 @@ def send_test_message(tickers, lookback_days=30, show_reasoning=True):
     message_payload = {
         "lookback_days": lookback_days,
         "overrides": {
-            "show_reasoning": show_reasoning
+            "show_reasoning": show_reasoning,
+            "trade_mode": trade_mode,  # "analysis" or "paper"
+            "dry_run": dry_run,  # If true, simulates orders without executing
         },
         "triggered_at": now.isoformat(),
         "source": "python_test_script"
@@ -125,8 +127,8 @@ def main():
     parser.add_argument(
         "--tickers",
         nargs="+",
-        required=True,
-        help="Ticker symbols to analyze (space-separated)"
+        default=["AAPL"],
+        help="Ticker symbols to analyze (space-separated, default: AAPL)"
     )
     parser.add_argument(
         "--lookback-days",
@@ -138,6 +140,17 @@ def main():
         "--no-reasoning",
         action="store_true",
         help="Disable reasoning output in the analysis"
+    )
+    parser.add_argument(
+        "--trade-mode",
+        choices=["analysis", "paper"],
+        default="analysis",
+        help="Trading mode: 'analysis' (no trades) or 'paper' (execute via Alpaca paper trading)"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Simulate orders without actually submitting to broker (only relevant if trade-mode=paper)"
     )
 
     args = parser.parse_args()
@@ -152,12 +165,16 @@ def main():
     print(f"Tickers: {', '.join(tickers)}")
     print(f"Lookback days: {args.lookback_days}")
     print(f"Show reasoning: {not args.no_reasoning}")
+    print(f"Trade mode: {args.trade_mode}")
+    print(f"Dry run: {args.dry_run}")
     print()
 
     success = send_test_message(
         tickers=tickers,
         lookback_days=args.lookback_days,
-        show_reasoning=not args.no_reasoning
+        show_reasoning=not args.no_reasoning,
+        trade_mode=args.trade_mode,
+        dry_run=args.dry_run
     )
 
     return 0 if success else 1
