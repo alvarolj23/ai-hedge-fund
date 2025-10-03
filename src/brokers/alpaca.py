@@ -14,6 +14,7 @@ from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 from src.agents.portfolio_manager import PortfolioDecision
+from src.utils.ssl_utils import patch_requests_session
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -102,6 +103,12 @@ class PaperBroker:
                 try:
                     # paper=True -> uses paper environment regardless of APCA_API_BASE_URL value
                     self._client = TradingClient(self.api_key, self.api_secret, paper=True)
+                    # patch session to use any combined cert bundle created at startup/tests
+                    try:
+                        if hasattr(self._client, "_session"):
+                            patch_requests_session(self._client._session)
+                    except Exception:
+                        self._logger.exception("Failed to patch Alpaca client session for SSL")
                 except Exception as exc:
                     self._logger.error("Failed to initialize TradingClient: %s", exc)
                     self._client = None
