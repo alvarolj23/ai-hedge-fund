@@ -1,4 +1,6 @@
 import sys
+import requests
+import logging
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
@@ -32,6 +34,8 @@ load_dotenv()
 
 init(autoreset=True)
 
+logger = logging.getLogger(__name__)
+
 
 def parse_hedge_fund_response(response):
     """Parses a JSON string and returns a dictionary."""
@@ -46,6 +50,22 @@ def parse_hedge_fund_response(response):
     except Exception as e:
         print(f"Unexpected error while parsing response: {e}\nResponse: {repr(response)}")
         return None
+
+
+def get_current_prices(tickers: list[str]) -> dict[str, float]:
+    """Fetch current prices for the given tickers using Yahoo Finance API."""
+    prices = {}
+    for ticker in tickers:
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            prices[ticker] = float(price)
+        except Exception as e:
+            logger.warning(f"Failed to fetch price for {ticker}: {e}")
+            prices[ticker] = 100.0  # Default
+    return prices
 
 
 ##### Run the Hedge Fund #####
@@ -173,10 +193,13 @@ def run_hedge_fund(
                 dry_run=dry_run,
             )
 
+        current_prices = get_current_prices(tickers)
+
         return {
             "decisions": decisions,
             "analyst_signals": analyst_signals,
             "broker_orders": broker_orders,
+            "current_prices": current_prices,
             "run_id": run_identifier,
             "run_at": run_timestamp,
             "user_id": resolved_user_id,

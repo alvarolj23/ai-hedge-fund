@@ -9,15 +9,16 @@ import random
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Iterable, Optional
 
 from dotenv import load_dotenv
 
 try:  # pragma: no cover - imported lazily for environments without Azure SDK
     from azure.core.exceptions import AzureError, ResourceExistsError, ServiceRequestError, ServiceResponseError
-    from azure.storage.queue import QueueClient, TextBase64DecodePolicy, TextBase64EncodePolicy
+    from azure.storage.queue import QueueClient, TextBase64EncodePolicy
     from azure.storage.queue._models import QueueMessage
+    from azure.storage.queue._message_encoding import DecodeError, TextBase64DecodePolicy
     try:
         from azure.cosmos.exceptions import CosmosHttpResponseError
     except ImportError:  # pragma: no cover
@@ -30,6 +31,8 @@ except ImportError as exc:  # pragma: no cover
 
 import httpx
 
+from src.brokers.execution import dispatch_paper_orders
+from src.brokers.portfolio_fetcher import get_alpaca_portfolio
 from src.data.cosmos_repository import CosmosRepository
 from src.main import run_hedge_fund
 
@@ -38,6 +41,18 @@ logger = logging.getLogger(__name__)
 
 class PoisonMessageError(Exception):
     """Raised when a queue message cannot be processed and should be dead-lettered."""
+
+
+class FlexibleTextDecodePolicy(TextBase64DecodePolicy):
+    """Decode queue messages encoded as base64 while tolerating plain text payloads."""
+
+    def decode(self, content, response):  # type: ignore[override]
+        try:
+            return super().decode(content, response)
+        except DecodeError:
+            # Messages pushed via CLI or other tooling may already be plain JSON.
+            # Fall back to the raw content so we can still process them.
+            return content
 
 
 @dataclass(slots=True)
@@ -127,7 +142,7 @@ class QueueWorker:
         account_url = f"https://{config.account}.queue.core.windows.net"
 
         encode_policy = TextBase64EncodePolicy()
-        decode_policy = TextBase64DecodePolicy()
+        decode_policy = FlexibleTextDecodePolicy()
 
         queue_client = QueueClient(
             account_url=account_url,
@@ -161,13 +176,17 @@ class QueueWorker:
             config=config,
         )
 
-    def run(self) -> None:
-        """Receive and process a single queue message."""
+    def run(self) -> bool:
+        """Receive and process a single queue message.
+
+        Returns:
+            True if a message was processed, False if no messages were available.
+        """
 
         message = self._receive_message()
         if message is None:
             logger.info("No messages available on queue '%s'", self.config.queue_name)
-            return
+            return False
 
         logger.info("Processing message %s", message.id)
         
@@ -180,19 +199,20 @@ class QueueWorker:
         except PoisonMessageError as exc:
             logger.error("Poison message detected: %s", exc)
             self._dead_letter(message, reason=str(exc))
-            return
+            return True
 
         try:
             self._process_with_retries(message, payload)
             logger.info("Message %s processed successfully", message.id)
+            return True
         except PoisonMessageError as exc:
             logger.error("Poison message after validation: %s", exc)
             self._dead_letter(message, reason=str(exc))
-            return
+            return True
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.exception("Failed to process message %s: %s", message.id, exc)
-            self._dead_letter(message, reason=f"processing_error: {exc}")
-            return
+            logger.exception("Failed to process message %s", message.id)
+            self._dead_letter(message, reason=f"processing_error: {type(exc).__name__}")
+            return True
 
     def _receive_message(self) -> Optional[QueueMessage]:
         return self._execute_with_backoff(
@@ -244,35 +264,64 @@ class QueueWorker:
 
     def _parse_message(self, message: QueueMessage) -> Dict[str, Any]:
         try:
-            payload = json.loads(message.content)
+            content = message.content
+            if not isinstance(content, str):
+                raise PoisonMessageError("Queue message content must be text")
+            payload = json.loads(content)
         except json.JSONDecodeError as exc:  # pragma: no cover - defensive programming
             raise PoisonMessageError("Message content is not valid JSON") from exc
 
         if not isinstance(payload, dict):
             raise PoisonMessageError("Queue message payload must be a JSON object")
 
-        tickers = payload.get("tickers")
-        if not tickers or not isinstance(tickers, Iterable) or isinstance(tickers, (str, bytes)):
-            raise PoisonMessageError("Queue message is missing a list of 'tickers'")
-        tickers = [ticker.strip() for ticker in tickers if str(ticker).strip()]
+        tickers: Iterable[Any] | None = payload.get("tickers")
+        if isinstance(tickers, (str, bytes)):
+            tickers = [tickers]
+
         if not tickers:
+            ticker = payload.get("ticker") or payload.get("symbol") or payload.get("asset")
+            if ticker:
+                tickers = [ticker]
+
+        if not tickers:
+            raise PoisonMessageError("Queue message must include 'tickers' or a single 'ticker'/'symbol'")
+
+        normalised_tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
+        if not normalised_tickers:
             raise PoisonMessageError("Queue message included an empty ticker list")
 
-        analysis_window = payload.get("analysis_window") or {}
-        if not isinstance(analysis_window, dict):
-            raise PoisonMessageError("'analysis_window' must be a JSON object with start/end dates")
+        analysis_window = payload.get("analysis_window") if isinstance(payload.get("analysis_window"), dict) else {}
 
-        start_date = analysis_window.get("start") or analysis_window.get("start_date")
-        end_date = analysis_window.get("end") or analysis_window.get("end_date")
+        start_date = (
+            analysis_window.get("start")
+            or analysis_window.get("start_date")
+            or payload.get("start")
+            or payload.get("start_date")
+        )
+        end_date = (
+            analysis_window.get("end")
+            or analysis_window.get("end_date")
+            or payload.get("end")
+            or payload.get("end_date")
+        )
+
         if not (start_date and end_date):
-            raise PoisonMessageError("'analysis_window' must contain 'start'/'end' or 'start_date'/'end_date'")
+            lookback_days = payload.get("lookback_days") or payload.get("lookback") or os.getenv("QUEUE_DEFAULT_LOOKBACK_DAYS", "30")
+            try:
+                lookback_days_int = int(lookback_days)
+            except (TypeError, ValueError):
+                lookback_days_int = 30
+
+            now = datetime.now(timezone.utc)
+            start_date = (now - timedelta(days=lookback_days_int)).isoformat()
+            end_date = now.isoformat()
 
         overrides = payload.get("overrides") or {}
         if overrides and not isinstance(overrides, dict):
             raise PoisonMessageError("'overrides' must be a JSON object when provided")
 
         return {
-            "tickers": tickers,
+            "tickers": normalised_tickers,
             "start_date": start_date,
             "end_date": end_date,
             "overrides": overrides,
@@ -283,13 +332,32 @@ class QueueWorker:
         self._process_message(message, payload)
 
     def _process_message(self, message: QueueMessage, payload: Dict[str, Any]) -> None:
-        portfolio_snapshot = self.repository.get_latest_portfolio_snapshot()
-        if not portfolio_snapshot:
-            raise RuntimeError("No portfolio snapshot available in Cosmos DB")
+        # Check if we should use Alpaca for portfolio data (default: True)
+        use_alpaca = os.getenv("USE_ALPACA_PORTFOLIO", "true").lower() == "true"
+        
+        if use_alpaca:
+            # Fetch real-time portfolio from Alpaca
+            logger.info("Fetching portfolio from Alpaca Paper Trading API")
+            try:
+                portfolio_data = get_alpaca_portfolio(
+                    tickers=payload["tickers"],
+                    paper=True  # Always use paper trading
+                )
+                portfolio_snapshot_id = "alpaca-live"
+            except Exception as exc:
+                logger.error("Failed to fetch portfolio from Alpaca: %s", exc)
+                raise RuntimeError(f"Failed to fetch Alpaca portfolio: {exc}") from exc
+        else:
+            # Fallback to Cosmos DB (legacy mode)
+            logger.info("Fetching portfolio from Cosmos DB")
+            portfolio_snapshot = self.repository.get_latest_portfolio_snapshot()
+            if not portfolio_snapshot:
+                raise RuntimeError("No portfolio snapshot available in Cosmos DB")
 
-        portfolio_data = portfolio_snapshot.get("portfolio") if isinstance(portfolio_snapshot, dict) else None
-        if portfolio_data is None:
-            raise RuntimeError("Portfolio snapshot payload is missing the 'portfolio' field")
+            portfolio_data = portfolio_snapshot.get("portfolio") if isinstance(portfolio_snapshot, dict) else None
+            if portfolio_data is None:
+                raise RuntimeError("Portfolio snapshot payload is missing the 'portfolio' field")
+            portfolio_snapshot_id = portfolio_snapshot.get("id")
 
         overrides = payload.get("overrides", {})
         run_kwargs = {
@@ -314,7 +382,8 @@ class QueueWorker:
                 "start": payload["start_date"],
                 "end": payload["end_date"],
             },
-            "portfolioSnapshotId": portfolio_snapshot.get("id"),
+            "portfolioSnapshotId": portfolio_snapshot_id,
+            "portfolioSource": "alpaca" if use_alpaca else "cosmos",
             "decisions": hedge_result.get("decisions"),
             "analystSignals": hedge_result.get("analyst_signals"),
             "processedAt": processed_at,
@@ -322,18 +391,57 @@ class QueueWorker:
                 "rawMessage": payload["raw"],
             },
         }
-        self.repository.save_run_result(message.id, result_record)
 
-        summary = self._summarise_decisions(hedge_result.get("decisions"))
-        status_payload = {
-            "id": message.id,
-            "messageId": message.id,
-            "status": "completed",
-            "summary": summary,
-            "tickers": payload["tickers"],
-            "processedAt": processed_at,
-        }
-        self.repository.publish_status(message.id, status_payload)
+        # Check if trade_mode is enabled in overrides
+        trade_mode = overrides.get("trade_mode", "analysis")
+        if trade_mode == "paper":
+            logger.info("Trade mode is 'paper' - executing orders via Alpaca")
+            analyst_signals = hedge_result.get("analyst_signals", {})
+            current_prices = hedge_result.get("current_prices", {})
+            state_data = {"current_prices": current_prices}
+
+            orders = dispatch_paper_orders(
+                decisions=hedge_result.get("decisions", {}),
+                analyst_signals=analyst_signals,
+                state_data=state_data,
+                confidence_threshold=overrides.get("confidence_threshold", 60),
+                dry_run=overrides.get("dry_run", False),
+            )
+            
+            result_record["broker_orders"] = orders
+            result_record["trade_mode"] = "paper"
+            logger.info("Executed %d broker orders", len(orders))
+        else:
+            logger.info("Trade mode is 'analysis' - no orders will be executed")
+            result_record["trade_mode"] = "analysis"
+
+        # Save results to Cosmos DB (optional - can be disabled)
+        save_to_cosmos = os.getenv("SAVE_TO_COSMOS", "false").lower() == "true"
+        if save_to_cosmos:
+            self.repository.save_run_result(message.id, result_record)
+
+            summary = self._summarise_decisions(hedge_result.get("decisions"))
+            status_payload = {
+                "id": message.id,
+                "messageId": message.id,
+                "status": "completed",
+                "summary": summary,
+                "tickers": payload["tickers"],
+                "processedAt": processed_at,
+            }
+            self.repository.publish_status(message.id, status_payload)
+            logger.info("Saved results to Cosmos DB")
+        else:
+            logger.info("Skipping Cosmos DB persistence (SAVE_TO_COSMOS=false)")
+
+        # Log final summary
+        logger.info(
+            "Processing complete for message %s: tickers=%s, decisions=%d, trade_mode=%s",
+            message.id,
+            payload["tickers"],
+            len(hedge_result.get("decisions", {})),
+            trade_mode
+        )
 
     def _compute_backoff(self, attempt: int) -> float:
         capped_attempt = max(0, attempt - 1)
@@ -393,6 +501,46 @@ class QueueWorker:
                     logger.exception("Non-retryable error during %s", operation_name)
                     return None
                 raise
+
+    def _update_portfolio_from_orders(self, portfolio_data: dict, orders: list, current_prices: dict) -> dict:
+        """Update the portfolio based on executed orders."""
+        updated_portfolio = dict(portfolio_data)  # Copy
+        positions = dict(updated_portfolio.get("positions", {}))
+        total_cash = float(updated_portfolio.get("total_cash", 0.0))
+
+        for order in orders:
+            if order.get("status") in ["error", "skipped", "skipped_confidence"]:
+                continue  # Skip failed orders
+
+            ticker = order.get("ticker")
+            action = order.get("action", "").lower()
+            quantity = int(order.get("quantity", 0))
+            price = float(current_prices.get(ticker, 0.0))
+
+            if not ticker or quantity <= 0 or price <= 0:
+                continue
+
+            cost = quantity * price
+
+            if action in ["buy", "cover"]:
+                if total_cash >= cost:
+                    total_cash -= cost
+                    positions[ticker] = positions.get(ticker, 0) + quantity
+                else:
+                    logger.warning(f"Insufficient cash for {action} {quantity} {ticker} at {price}")
+            elif action in ["sell", "short"]:
+                current_qty = positions.get(ticker, 0)
+                if current_qty >= quantity:
+                    total_cash += cost
+                    positions[ticker] = current_qty - quantity
+                    if positions[ticker] <= 0:
+                        positions.pop(ticker, None)
+                else:
+                    logger.warning(f"Insufficient position for {action} {quantity} {ticker}")
+
+        updated_portfolio["positions"] = positions
+        updated_portfolio["total_cash"] = total_cash
+        return updated_portfolio
 
 
 def main() -> None:
