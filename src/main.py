@@ -8,6 +8,15 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# Configure logging EARLY - before any other imports
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
 # SSL / Certificate setup for corporate environments (must be done early)
 from src.utils.ssl_utils import create_combined_cabundle
 
@@ -222,14 +231,70 @@ def run_hedge_fund(
         analyst_signals = final_state["data"]["analyst_signals"]
 
         broker_orders: list[dict[str, Any]] = []
-        if trade_mode and trade_mode.lower() == "paper" and decisions:
-            broker_orders = dispatch_paper_orders(
-                decisions=decisions,
-                analyst_signals=analyst_signals,
-                state_data=final_state["data"],
-                confidence_threshold=confidence_threshold,
-                dry_run=dry_run,
-            )
+        
+        # TRADE EXECUTION SECTION
+        if trade_mode and trade_mode.lower() == "paper":
+            print("\n" + "=" * 80)
+            print("TRADE EXECUTION MODE: PAPER TRADING")
+            print("=" * 80)
+            
+            if not decisions:
+                print("❌ No trading decisions generated - skipping trade execution")
+                logger.warning("Trade mode is 'paper' but no decisions were generated")
+            else:
+                print(f"✅ Trading decisions generated for {len(decisions)} ticker(s)")
+                print(f"📊 Confidence threshold: {confidence_threshold or 60}%")
+                print(f"🔧 Dry run mode: {dry_run}")
+                
+                # Log decisions before execution
+                print("\n📋 DECISIONS TO EXECUTE:")
+                for ticker, decision in decisions.items():
+                    action = decision.get('action', 'unknown')
+                    quantity = decision.get('quantity', 0)
+                    confidence = decision.get('confidence', 0)
+                    print(f"   • {ticker}: {action.upper()} {quantity} shares (confidence: {confidence}%)")
+                
+                print("\n🚀 Dispatching orders to Alpaca Paper Trading API...")
+                print("-" * 80)
+                
+                try:
+                    broker_orders = dispatch_paper_orders(
+                        decisions=decisions,
+                        analyst_signals=analyst_signals,
+                        state_data=final_state["data"],
+                        confidence_threshold=confidence_threshold,
+                        dry_run=dry_run,
+                    )
+                    
+                    print("-" * 80)
+                    if broker_orders:
+                        print(f"\n✅ TRADE EXECUTION COMPLETE: {len(broker_orders)} order(s) processed")
+                        print("\n📊 ORDER SUMMARY:")
+                        for idx, order in enumerate(broker_orders, 1):
+                            status_icon = "✅" if order['status'] in ['filled', 'accepted', 'accepted_dry_run'] else "❌"
+                            print(f"   {status_icon} Order {idx}: {order['action'].upper()} {order['quantity']} {order['ticker']}")
+                            print(f"      Status: {order['status']}")
+                            if order.get('error'):
+                                print(f"      Error: {order['error']}")
+                            if order.get('order_id'):
+                                print(f"      Order ID: {order['order_id']}")
+                    else:
+                        print("\n⚠️  NO ORDERS EXECUTED")
+                        print("   Possible reasons:")
+                        print("   • Decisions didn't meet confidence threshold")
+                        print("   • Risk limits prevented execution")
+                        print("   • All actions were 'hold'")
+                        
+                except Exception as e:
+                    print(f"\n❌ ERROR DURING TRADE EXECUTION: {e}")
+                    logger.exception("Failed to dispatch paper orders")
+                
+                print("=" * 80 + "\n")
+        else:
+            if trade_mode:
+                logger.info(f"Trade mode is '{trade_mode}' (not 'paper') - skipping trade execution")
+            else:
+                logger.info("No trade mode specified - analysis only")
 
         current_prices = get_current_prices(tickers)
 
