@@ -42,49 +42,49 @@ resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2025
 resource portfolioContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: cosmosDatabase
   name: portfolioContainerName
-  properties: { resource: { id: portfolioContainerName, partitionKey: { paths: ['/id'], kind: 'Hash' } } }
+  properties: { resource: { id: portfolioContainerName, partitionKey: { paths: ['/partition_key'], kind: 'Hash' } } }
 }
 
 resource analystSignalsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: cosmosDatabase
   name: analystSignalsContainerName
-  properties: { resource: { id: analystSignalsContainerName, partitionKey: { paths: ['/id'], kind: 'Hash' } } }
+  properties: { resource: { id: analystSignalsContainerName, partitionKey: { paths: ['/partition_key'], kind: 'Hash' } } }
 }
 
 resource decisionsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: cosmosDatabase
   name: decisionsContainerName
-  properties: { resource: { id: decisionsContainerName, partitionKey: { paths: ['/id'], kind: 'Hash' } } }
+  properties: { resource: { id: decisionsContainerName, partitionKey: { paths: ['/partition_key'], kind: 'Hash' } } }
 }
 
 resource portfolioSnapshotsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: cosmosDatabase
   name: portfolioSnapshotsContainerName
-  properties: { resource: { id: portfolioSnapshotsContainerName, partitionKey: { paths: ['/id'], kind: 'Hash' } } }
+  properties: { resource: { id: portfolioSnapshotsContainerName, partitionKey: { paths: ['/partition_key'], kind: 'Hash' } } }
 }
 
 resource runResultsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: cosmosDatabase
   name: runResultsContainerName
-  properties: { resource: { id: runResultsContainerName, partitionKey: { paths: ['/id'], kind: 'Hash' } } }
+  properties: { resource: { id: runResultsContainerName, partitionKey: { paths: ['/partition_key'], kind: 'Hash' } } }
 }
 
 resource runStatusContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: cosmosDatabase
   name: runStatusContainerName
-  properties: { resource: { id: runStatusContainerName, partitionKey: { paths: ['/id'], kind: 'Hash' } } }
+  properties: { resource: { id: runStatusContainerName, partitionKey: { paths: ['/partition_key'], kind: 'Hash' } } }
 }
 
 resource brokerOrdersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: cosmosDatabase
   name: brokerOrdersContainerName
-  properties: { resource: { id: brokerOrdersContainerName, partitionKey: { paths: ['/id'], kind: 'Hash' } } }
+  properties: { resource: { id: brokerOrdersContainerName, partitionKey: { paths: ['/partition_key'], kind: 'Hash' } } }
 }
 
 resource monitorCooldownContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2025-04-15' = {
   parent: cosmosDatabase
   name: monitorCooldownContainerName
-  properties: { resource: { id: monitorCooldownContainerName, partitionKey: { paths: ['/id'], kind: 'Hash' } } }
+  properties: { resource: { id: monitorCooldownContainerName, partitionKey: { paths: ['/partition_key'], kind: 'Hash' } } }
 }
 
 output portfolioContainerName string = portfolioContainer.name
