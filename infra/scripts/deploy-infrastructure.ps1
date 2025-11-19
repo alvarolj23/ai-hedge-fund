@@ -78,23 +78,36 @@ try {
 
     # Check if Azure CLI is installed and has Bicep extension
     Write-Host "Checking Azure CLI and Bicep..." -ForegroundColor Cyan
-    try {
-        $azVersion = az --version 2>$null
-        if (-not $azVersion) { throw "Azure CLI check failed" }
-        
-        # Check if Bicep is available
-        az bicep version 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Installing Bicep extension..." -ForegroundColor Yellow
-            az bicep install --only-show-errors
-            if ($LASTEXITCODE -ne 0) { throw "Failed to install Bicep extension" }
-        }
-        
-        Write-Host "Azure CLI and Bicep are available" -ForegroundColor Green
-    }
-    catch {
+    
+    # Check if az command exists
+    $azCommand = Get-Command az -ErrorAction SilentlyContinue
+    if (-not $azCommand) {
         throw "Azure CLI is not installed or not in PATH. Please install Azure CLI first."
     }
+    
+    # Temporarily disable strict error handling for Bicep check
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    
+    try {
+        # Check if Bicep is available (suppress output as it may contain warnings)
+        $bicepOutput = az bicep version 2>&1 | Out-String
+        $bicepExitCode = $LASTEXITCODE
+        
+        if ($bicepExitCode -ne 0) {
+            Write-Host "Installing Bicep extension..." -ForegroundColor Yellow
+            az bicep install --only-show-errors
+            if ($LASTEXITCODE -ne 0) { 
+                throw "Failed to install Bicep extension" 
+            }
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    
+    Write-Host "Azure CLI and Bicep are available" -ForegroundColor Green
+
 
     # Authenticate with Azure
     Write-Host "Authenticating with Azure subscription $SubscriptionId..." -ForegroundColor Cyan
