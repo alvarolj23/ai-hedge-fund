@@ -79,33 +79,53 @@ try {
     # Verify common infrastructure exists
     Write-Host "Step 2: Verifying common infrastructure..." -ForegroundColor Cyan
 
-    # Check Cosmos DB
-    $cosmos = az cosmosdb show --name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup -o json 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Cosmos DB account '$CommonCosmosAccountName' not found in '$CommonInfraResourceGroup'"
+    # Check Cosmos DB (handle corporate SSL/proxy warnings)
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $cosmos = az cosmosdb show --name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup -o json 2>&1 | Where-Object { $_ -notmatch 'WARNING' }
+        if (-not $cosmos -or $cosmos -match 'ERROR' -or $cosmos -match 'ResourceNotFound') {
+            throw "Cosmos DB account '$CommonCosmosAccountName' not found in '$CommonInfraResourceGroup'"
+        }
+        Write-Host "  Cosmos DB verified: $CommonCosmosAccountName" -ForegroundColor Green
     }
-    Write-Host "  Cosmos DB verified: $CommonCosmosAccountName" -ForegroundColor Green
-
-    # Check ACR
-    $acr = az acr show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Container Registry '$CommonAcrName' not found in '$CommonInfraResourceGroup'"
+    finally {
+        $ErrorActionPreference = $previousErrorAction
     }
-    $acrData = $acr | ConvertFrom-Json
-    $acrLoginServer = $acrData.loginServer
-    Write-Host "  ACR verified: $CommonAcrName ($acrLoginServer)" -ForegroundColor Green
-    Write-Host ""
 
-    # Get ACR credentials
+    # Check ACR (handle corporate SSL/proxy warnings)
+    $ErrorActionPreference = 'Continue'
+    try {
+        $acr = az acr show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json 2>&1 | Where-Object { $_ -notmatch 'WARNING' }
+        if (-not $acr -or $acr -match 'ERROR' -or $acr -match 'ResourceNotFound') {
+            throw "Container Registry '$CommonAcrName' not found in '$CommonInfraResourceGroup'"
+        }
+        $acrData = $acr | ConvertFrom-Json
+        $acrLoginServer = $acrData.loginServer
+        Write-Host "  ACR verified: $CommonAcrName ($acrLoginServer)" -ForegroundColor Green
+        Write-Host ""
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+
+    # Get ACR credentials (handle corporate SSL/proxy warnings)
     Write-Host "Step 3: Retrieving ACR credentials..." -ForegroundColor Cyan
-    $acrCredentials = az acr credential show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to retrieve ACR credentials. Ensure admin user is enabled on the ACR."
+    $ErrorActionPreference = 'Continue'
+    try {
+        $acrCredJson = az acr credential show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json 2>&1 | Where-Object { $_ -notmatch 'WARNING' }
+        if (-not $acrCredJson -or $acrCredJson -match 'ERROR') {
+            throw "Failed to retrieve ACR credentials. Ensure admin user is enabled on the ACR."
+        }
+        $acrCredentials = $acrCredJson | ConvertFrom-Json
+        $acrUsername = $acrCredentials.username
+        $acrPassword = $acrCredentials.passwords[0].value
+        Write-Host "  ACR credentials retrieved" -ForegroundColor Green
+        Write-Host ""
     }
-    $acrUsername = $acrCredentials.username
-    $acrPassword = $acrCredentials.passwords[0].value
-    Write-Host "  ACR credentials retrieved" -ForegroundColor Green
-    Write-Host ""
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
 
     # Setup Cosmos DB
     if (-not $SkipCosmosSetup) {
