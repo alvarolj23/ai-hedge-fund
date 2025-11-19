@@ -93,26 +93,25 @@ class PaperBroker:
         self.api_key = api_key or _env("APCA_API_KEY_ID", "ALPACA_API_KEY_ID")
         self.api_secret = api_secret or _env("APCA_API_SECRET_KEY", "ALPACA_API_SECRET_KEY")
 
-        # If not forcing dry-run, create the TradingClient with paper=True (targets paper environment).
+        # Initialize the TradingClient for reading positions and market data
+        # Note: dry_run mode still needs to read REAL positions from Alpaca
+        # It only affects whether orders are actually submitted or simulated
         self._client: Optional[TradingClient] = None
-        if not self.dry_run:
-            if not self.api_key or not self.api_secret:
-                self._logger.warning("Missing Alpaca credentials. Falling back to dry-run mode.")
-                self.dry_run = True
-            else:
+        if not self.api_key or not self.api_secret:
+            self._logger.warning("Missing Alpaca credentials. Operations will return mock data.")
+        else:
+            try:
+                # paper=True -> uses paper environment regardless of APCA_API_BASE_URL value
+                self._client = TradingClient(self.api_key, self.api_secret, paper=True)
+                # patch session to use any combined cert bundle created at startup/tests
                 try:
-                    # paper=True -> uses paper environment regardless of APCA_API_BASE_URL value
-                    self._client = TradingClient(self.api_key, self.api_secret, paper=True)
-                    # patch session to use any combined cert bundle created at startup/tests
-                    try:
-                        if hasattr(self._client, "_session"):
-                            patch_requests_session(self._client._session)
-                    except Exception:
-                        self._logger.exception("Failed to patch Alpaca client session for SSL")
-                except Exception as exc:
-                    self._logger.error("Failed to initialize TradingClient: %s", exc)
-                    self._client = None
-                    self.dry_run = True
+                    if hasattr(self._client, "_session"):
+                        patch_requests_session(self._client._session)
+                except Exception:
+                    self._logger.exception("Failed to patch Alpaca client session for SSL")
+            except Exception as exc:
+                self._logger.error("Failed to initialize TradingClient: %s", exc)
+                self._client = None
 
         # Optional: env override for confidence threshold
         confidence_override = os.getenv("ALPACA_CONFIDENCE_THRESHOLD")
@@ -121,8 +120,84 @@ class PaperBroker:
                 self.confidence_threshold = int(confidence_override)
             except ValueError:
                 self._logger.warning("Invalid ALPACA_CONFIDENCE_THRESHOLD=%s", confidence_override)
+        
+        # Verify account has sufficient equity for margin/short selling ($2,000 minimum)
+        if self._client:
+            try:
+                account = self._client.get_account()
+                equity = float(account.equity)
+                self._logger.info(
+                    "Alpaca account equity: $%.2f (minimum $2,000 required for short selling)",
+                    equity
+                )
+                if equity < 2000:
+                    self._logger.warning(
+                        "⚠️  Account equity ($%.2f) is below $2,000 minimum for margin/short selling. "
+                        "Short orders may be rejected.",
+                        equity
+                    )
+            except Exception as exc:
+                self._logger.warning("Could not verify account equity: %s", exc)
 
     # -------------------- Public API --------------------
+    def get_current_position(self, ticker: str) -> Dict[str, Any]:
+        """
+        Fetch current position for a ticker from Alpaca.
+        
+        Returns:
+            {
+                "long": int,     # Number of shares long (0 if no position)
+                "short": int,    # Number of shares short (0 if no position)
+                "side": str,     # "long", "short", or "flat"
+            }
+        """
+        # NOTE: Even in dry_run mode, we need to fetch REAL positions from Alpaca
+        # to properly reconcile them. Dry-run only affects ORDER SUBMISSION, not position fetching.
+        if self._client is None:
+            return {"long": 0, "short": 0, "side": "flat"}
+        
+        try:
+            position = self._client.get_open_position(ticker)
+            qty = float(position.qty)
+            
+            if qty > 0:
+                return {"long": int(qty), "short": 0, "side": "long"}
+            elif qty < 0:
+                return {"long": 0, "short": int(abs(qty)), "side": "short"}
+            else:
+                return {"long": 0, "short": 0, "side": "flat"}
+        except Exception as exc:
+            # No position exists or other error
+            self._logger.debug("No position found for %s: %s", ticker, exc)
+            return {"long": 0, "short": 0, "side": "flat"}
+
+    def check_shortable(self, ticker: str) -> Dict[str, Any]:
+        """
+        Check if a ticker is shortable and how many shares are available.
+        
+        Returns:
+            {
+                "shortable": bool,
+                "easy_to_borrow": bool,
+                "available_shares": int or None,  # May not be exposed by API
+            }
+        """
+        # NOTE: Even in dry_run mode, we should check REAL shortability from Alpaca
+        # to provide accurate validation. Dry-run only affects ORDER SUBMISSION.
+        if self._client is None:
+            return {"shortable": True, "easy_to_borrow": True, "available_shares": None}
+        
+        try:
+            asset = self._client.get_asset(ticker)
+            return {
+                "shortable": asset.shortable if hasattr(asset, 'shortable') else False,
+                "easy_to_borrow": asset.easy_to_borrow if hasattr(asset, 'easy_to_borrow') else False,
+                "available_shares": None,  # Not exposed in alpaca-py API
+            }
+        except Exception as exc:
+            self._logger.warning("Failed to check shortable status for %s: %s", ticker, exc)
+            return {"shortable": False, "easy_to_borrow": False, "available_shares": None}
+
     def submit_order(
         self,
         ticker: str,

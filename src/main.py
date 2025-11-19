@@ -1,8 +1,48 @@
 import sys
 import requests
 import logging
+import os
 
 from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Configure logging EARLY - before any other imports
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# SSL / Certificate setup for corporate environments (must be done early)
+from src.utils.ssl_utils import create_combined_cabundle
+
+try:
+    # Try Windows certificate store integration first
+    try:
+        from windows_cert_helpers import patch_ssl_with_windows_trust_store
+        patch_ssl_with_windows_trust_store()
+        logger = logging.getLogger(__name__)
+        logger.info("Windows certificate store integration enabled")
+    except Exception:
+        pass
+    
+    # Create combined CA bundle (certifi + corporate CA)
+    CORP_CA_BUNDLE = os.getenv(
+        "CORP_CA_BUNDLE",
+        r"C:\Users\ama5332\OneDrive - Toyota Motor Europe\Documents\certs\TME_certificates_chain.crt"
+    )
+    combined_bundle = create_combined_cabundle(CORP_CA_BUNDLE)
+    if combined_bundle:
+        logger = logging.getLogger(__name__)
+        logger.info(f"Combined CA bundle created: {combined_bundle}")
+except Exception as e:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"SSL setup warning: {e}")
+
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, StateGraph
 from colorama import Fore, Style, init
@@ -21,6 +61,8 @@ from src.cli.input import (
 )
 from src.services.persistence.cosmos import get_cosmos_persistence
 from src.utils.portfolio import merge_portfolio_structures
+from src.llm.models import LLM_ORDER, OLLAMA_LLM_ORDER, ModelProvider, get_model_info
+from src.utils.ollama import ensure_ollama_and_model
 
 import argparse
 from copy import deepcopy
@@ -35,6 +77,11 @@ load_dotenv()
 init(autoreset=True)
 
 logger = logging.getLogger(__name__)
+
+# Create a session with SSL configuration for API requests
+_http_session = requests.Session()
+from src.utils.ssl_utils import patch_requests_session
+patch_requests_session(_http_session)
 
 
 def parse_hedge_fund_response(response):
@@ -58,7 +105,7 @@ def get_current_prices(tickers: list[str]) -> dict[str, float]:
     for ticker in tickers:
         try:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1d"
-            response = requests.get(url, timeout=10)
+            response = _http_session.get(url, timeout=10)
             data = response.json()
             price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
             prices[ticker] = float(price)
@@ -184,14 +231,70 @@ def run_hedge_fund(
         analyst_signals = final_state["data"]["analyst_signals"]
 
         broker_orders: list[dict[str, Any]] = []
-        if trade_mode and trade_mode.lower() == "paper" and decisions:
-            broker_orders = dispatch_paper_orders(
-                decisions=decisions,
-                analyst_signals=analyst_signals,
-                state_data=final_state["data"],
-                confidence_threshold=confidence_threshold,
-                dry_run=dry_run,
-            )
+        
+        # TRADE EXECUTION SECTION
+        if trade_mode and trade_mode.lower() == "paper":
+            print("\n" + "=" * 80)
+            print("TRADE EXECUTION MODE: PAPER TRADING")
+            print("=" * 80)
+            
+            if not decisions:
+                print("❌ No trading decisions generated - skipping trade execution")
+                logger.warning("Trade mode is 'paper' but no decisions were generated")
+            else:
+                print(f"✅ Trading decisions generated for {len(decisions)} ticker(s)")
+                print(f"📊 Confidence threshold: {confidence_threshold or 60}%")
+                print(f"🔧 Dry run mode: {dry_run}")
+                
+                # Log decisions before execution
+                print("\n📋 DECISIONS TO EXECUTE:")
+                for ticker, decision in decisions.items():
+                    action = decision.get('action', 'unknown')
+                    quantity = decision.get('quantity', 0)
+                    confidence = decision.get('confidence', 0)
+                    print(f"   • {ticker}: {action.upper()} {quantity} shares (confidence: {confidence}%)")
+                
+                print("\n🚀 Dispatching orders to Alpaca Paper Trading API...")
+                print("-" * 80)
+                
+                try:
+                    broker_orders = dispatch_paper_orders(
+                        decisions=decisions,
+                        analyst_signals=analyst_signals,
+                        state_data=final_state["data"],
+                        confidence_threshold=confidence_threshold,
+                        dry_run=dry_run,
+                    )
+                    
+                    print("-" * 80)
+                    if broker_orders:
+                        print(f"\n✅ TRADE EXECUTION COMPLETE: {len(broker_orders)} order(s) processed")
+                        print("\n📊 ORDER SUMMARY:")
+                        for idx, order in enumerate(broker_orders, 1):
+                            status_icon = "✅" if order['status'] in ['filled', 'accepted', 'accepted_dry_run'] else "❌"
+                            print(f"   {status_icon} Order {idx}: {order['action'].upper()} {order['quantity']} {order['ticker']}")
+                            print(f"      Status: {order['status']}")
+                            if order.get('error'):
+                                print(f"      Error: {order['error']}")
+                            if order.get('order_id'):
+                                print(f"      Order ID: {order['order_id']}")
+                    else:
+                        print("\n⚠️  NO ORDERS EXECUTED")
+                        print("   Possible reasons:")
+                        print("   • Decisions didn't meet confidence threshold")
+                        print("   • Risk limits prevented execution")
+                        print("   • All actions were 'hold'")
+                        
+                except Exception as e:
+                    print(f"\n❌ ERROR DURING TRADE EXECUTION: {e}")
+                    logger.exception("Failed to dispatch paper orders")
+                
+                print("=" * 80 + "\n")
+        else:
+            if trade_mode:
+                logger.info(f"Trade mode is '{trade_mode}' (not 'paper') - skipping trade execution")
+            else:
+                logger.info("No trade mode specified - analysis only")
 
         current_prices = get_current_prices(tickers)
 
@@ -419,8 +522,8 @@ if __name__ == "__main__":
 
     # Initialize portfolio with cash amount and stock positions
     portfolio = {
-        "cash": inputs.initial_cash,
-        "margin_requirement": inputs.margin_requirement,
+        "cash": args.initial_cash,
+        "margin_requirement": args.margin_requirement,
         "margin_used": 0.0,
         "positions": {
             ticker: {
@@ -443,13 +546,13 @@ if __name__ == "__main__":
 
     result = run_hedge_fund(
         tickers=tickers,
-        start_date=inputs.start_date,
-        end_date=inputs.end_date,
+        start_date=start_date,
+        end_date=end_date,
         portfolio=portfolio,
-        show_reasoning=inputs.show_reasoning,
-        selected_analysts=inputs.selected_analysts,
-        model_name=inputs.model_name,
-        model_provider=inputs.model_provider,
+        show_reasoning=args.show_reasoning,
+        selected_analysts=selected_analysts,
+        model_name=model_name,
+        model_provider=model_provider,
         trade_mode=args.trade_mode,
         dry_run=args.dry_run,
         confidence_threshold=args.confidence_threshold,

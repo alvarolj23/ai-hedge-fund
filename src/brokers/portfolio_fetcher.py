@@ -52,13 +52,16 @@ class AlpacaPortfolioFetcher:
             )
 
         self._client = TradingClient(self.api_key, self.api_secret, paper=self.paper)
-        # If the underlying client exposes a requests session, patch verify to use
-        # the combined CA bundle if available. We do not create bundles here; that
-        # should be done at application startup (tests or entrypoint) by calling
+        # Patch the underlying requests session to use the combined CA bundle if available.
+        # The bundle should be created at application startup (tests or entrypoint) by calling
         # src.utils.ssl_utils.create_combined_cabundle().
         try:
-            if hasattr(self._client, "_session"):
+            # Alpaca's TradingClient inherits from BaseClient which has _session
+            if hasattr(self._client, "_session") and self._client._session is not None:
                 patch_requests_session(self._client._session)
+                self._logger.debug("Successfully patched Alpaca client session for SSL")
+            else:
+                self._logger.warning("Alpaca client does not expose _session attribute")
         except Exception:
             self._logger.exception("Failed to patch Alpaca client session for SSL")
 

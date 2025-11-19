@@ -5,6 +5,7 @@ import requests
 import time
 
 from src.data.cache import get_cache
+from src.utils.ssl_utils import patch_requests_session
 from src.data.models import (
     CompanyNews,
     CompanyNewsResponse,
@@ -21,6 +22,10 @@ from src.data.models import (
 
 # Global cache instance
 _cache = get_cache()
+
+# Create a session with SSL configuration for corporate environments
+_session = requests.Session()
+patch_requests_session(_session)
 
 
 def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: dict = None, max_retries: int = 3) -> requests.Response:
@@ -42,9 +47,9 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
     """
     for attempt in range(max_retries + 1):  # +1 for initial attempt
         if method.upper() == "POST":
-            response = requests.post(url, headers=headers, json=json_data)
+            response = _session.post(url, headers=headers, json=json_data)
         else:
-            response = requests.get(url, headers=headers)
+            response = _session.get(url, headers=headers)
         
         if response.status_code == 429 and attempt < max_retries:
             # Linear backoff: 60s, 90s, 120s, 150s...

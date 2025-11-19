@@ -25,42 +25,33 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # SSL / Certificate setup for corporate environments
+print("🔒 Setting up SSL certificates...")
 try:
-    import certifi
-    import ssl
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    from src.utils.ssl_utils import create_combined_cabundle
     
-    # Try Windows certificate store integration
+    # Try Windows certificate store integration first
     try:
         from windows_cert_helpers import patch_ssl_with_windows_trust_store
         patch_ssl_with_windows_trust_store()
-        print("✅ Windows certificate store integration enabled")
+        print("   ✅ Windows certificate store integration enabled")
     except Exception:
-        # Fallback: manual certificate bundle creation
-        CORP_CA_BUNDLE = os.getenv(
-            "CORP_CA_BUNDLE",
-            r"C:\Users\ama5332\OneDrive - Toyota Motor Europe\Documents\certs\TME_certificates_chain.crt"
-        )
+        print("   ⚠️  Windows certificate store not available, using CA bundle fallback")
+    
+    # Create combined CA bundle (certifi + corporate CA)
+    CORP_CA_BUNDLE = os.getenv(
+        "CORP_CA_BUNDLE",
+        r"C:\Users\ama5332\OneDrive - Toyota Motor Europe\Documents\certs\TME_certificates_chain.crt"
+    )
+    
+    combined_bundle = create_combined_cabundle(CORP_CA_BUNDLE)
+    if combined_bundle:
+        print(f"   ✅ Combined CA bundle created: {combined_bundle}")
+    else:
+        print("   ⚠️  No corporate CA bundle found, using system certificates only")
         
-        if os.path.exists(CORP_CA_BUNDLE):
-            sys_bundle = certifi.where()
-            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".pem") as tf:
-                with open(sys_bundle, "r") as f:
-                    tf.write(f.read())
-                tf.write("\n")
-                with open(CORP_CA_BUNDLE, "r") as f:
-                    tf.write(f.read())
-                cert_file = tf.name
-            
-            os.environ["SSL_CERT_FILE"] = cert_file
-            os.environ["REQUESTS_CA_BUNDLE"] = cert_file
-            os.environ["CURL_CA_BUNDLE"] = cert_file
-            print(f"✅ Corporate certificate bundle configured: {cert_file}")
-        else:
-            print(f"⚠️  Corporate CA bundle not found at {CORP_CA_BUNDLE}")
-except ImportError:
-    print("⚠️  Certificate modules not available")
+except Exception as e:
+    print(f"   ⚠️  SSL setup warning: {e}")
+    print("   Continuing with default certificate validation...")
 
 print("\n" + "=" * 60)
 print("ALPACA PAPER TRADING CONNECTION TEST")
