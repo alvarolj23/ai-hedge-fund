@@ -49,8 +49,7 @@ class CosmosCooldownStore:
         self._database = self._client.create_database_if_not_exists(id=database)
         self._container = self._database.create_container_if_not_exists(
             id=container,
-            partition_key=PartitionKey(path="/ticker"),
-            offer_throughput=400,
+            partition_key=PartitionKey(path="/ticker")
         )
 
     def get_last_trigger(self, ticker: str) -> dt.datetime | None:
