@@ -32,15 +32,13 @@ $env:PYTHONWARNINGS = "ignore"
 function Test-Resource {
     param(
         [string]$Name,
-        [string]$Type,
-        [string]$ResourceGroup,
-        [scriptblock]$TestCommand
+        [string]$Command
     )
 
     Write-Host "  Checking $Name..." -NoNewline
     try {
-        # Capture output and filter warnings
-        $rawOutput = & $TestCommand 2>&1
+        # Execute command and capture output, filtering warnings
+        $rawOutput = Invoke-Expression "$Command 2>&1"
         $exitCode = $LASTEXITCODE
         
         # Filter out SSL/certificate warnings
@@ -99,21 +97,15 @@ try {
 
     # Check Storage Account
     Write-Host "Storage Resources:" -ForegroundColor Cyan
-    $storageOk = Test-Resource -Name "Storage Account" -Type "Storage" -ResourceGroup $ResourceGroupName -TestCommand {
-        az storage account show --name $outputs.storageAccountName.value --resource-group $ResourceGroupName -o json 2>$null
-    }
+    $storageOk = Test-Resource -Name "Storage Account" -Command "az storage account show --name $($outputs.storageAccountName.value) --resource-group $ResourceGroupName -o json --only-show-errors"
     $allPassed = $allPassed -and $storageOk
 
     # Check Queues
     if ($storageOk) {
-        $queueOk = Test-Resource -Name "Analysis Queue" -Type "Queue" -ResourceGroup $ResourceGroupName -TestCommand {
-            az storage queue exists --name $outputs.storageQueueName.value --account-name $outputs.storageAccountName.value -o json 2>$null
-        }
+        $queueOk = Test-Resource -Name "Analysis Queue" -Command "az storage queue exists --name $($outputs.storageQueueName.value) --account-name $($outputs.storageAccountName.value) -o json"
         $allPassed = $allPassed -and $queueOk
 
-        $dlqOk = Test-Resource -Name "Dead Letter Queue" -Type "Queue" -ResourceGroup $ResourceGroupName -TestCommand {
-            az storage queue exists --name $outputs.storageDeadLetterQueueName.value --account-name $outputs.storageAccountName.value -o json 2>$null
-        }
+        $dlqOk = Test-Resource -Name "Dead Letter Queue" -Command "az storage queue exists --name $($outputs.storageDeadLetterQueueName.value) --account-name $($outputs.storageAccountName.value) -o json"
         $allPassed = $allPassed -and $dlqOk
     }
 
@@ -121,47 +113,34 @@ try {
 
     # Check Monitoring Resources
     Write-Host "Monitoring Resources:" -ForegroundColor Cyan
-    $lawOk = Test-Resource -Name "Log Analytics Workspace" -Type "Workspace" -ResourceGroup $ResourceGroupName -TestCommand {
-        az monitor log-analytics workspace show --workspace-name $outputs.logAnalyticsWorkspaceId.value.Split('/')[-1] --resource-group $ResourceGroupName -o json 2>$null
-    }
+    $lawName = $outputs.logAnalyticsWorkspaceId.value.Split('/')[-1]
+    $lawOk = Test-Resource -Name "Log Analytics Workspace" -Command "az monitor log-analytics workspace show --workspace-name $lawName --resource-group $ResourceGroupName -o json --only-show-errors"
     $allPassed = $allPassed -and $lawOk
 
-    $appInsightsOk = Test-Resource -Name "Application Insights" -Type "Component" -ResourceGroup $ResourceGroupName -TestCommand {
-        az monitor app-insights component show --app $outputs.appInsightsName.value --resource-group $ResourceGroupName -o json 2>$null
-    }
+    $appInsightsOk = Test-Resource -Name "Application Insights" -Command "az monitor app-insights component show --app $($outputs.appInsightsName.value) --resource-group $ResourceGroupName -o json --only-show-errors"
     $allPassed = $allPassed -and $appInsightsOk
 
     Write-Host ""
 
     # Check Container Apps
     Write-Host "Container Apps Resources:" -ForegroundColor Cyan
-    $caeOk = Test-Resource -Name "Container Apps Environment" -Type "Environment" -ResourceGroup $ResourceGroupName -TestCommand {
-        az containerapp env show --name $outputs.managedEnvironmentName.value --resource-group $ResourceGroupName -o json 2>$null
-    }
+    $caeOk = Test-Resource -Name "Container Apps Environment" -Command "az containerapp env show --name $($outputs.managedEnvironmentName.value) --resource-group $ResourceGroupName -o json --only-show-errors"
     $allPassed = $allPassed -and $caeOk
 
-    $apiOk = Test-Resource -Name "API Container App" -Type "ContainerApp" -ResourceGroup $ResourceGroupName -TestCommand {
-        az containerapp show --name $outputs.apiContainerAppName.value --resource-group $ResourceGroupName -o json 2>$null
-    }
+    $apiOk = Test-Resource -Name "API Container App" -Command "az containerapp show --name $($outputs.apiContainerAppName.value) --resource-group $ResourceGroupName -o json --only-show-errors"
     $allPassed = $allPassed -and $apiOk
 
-    $jobOk = Test-Resource -Name "Queue Worker Job" -Type "Job" -ResourceGroup $ResourceGroupName -TestCommand {
-        az containerapp job show --name $outputs.queueWorkerJobName.value --resource-group $ResourceGroupName -o json 2>$null
-    }
+    $jobOk = Test-Resource -Name "Queue Worker Job" -Command "az containerapp job show --name $($outputs.queueWorkerJobName.value) --resource-group $ResourceGroupName -o json --only-show-errors"
     $allPassed = $allPassed -and $jobOk
 
     Write-Host ""
 
     # Check Function App
     Write-Host "Function App Resources:" -ForegroundColor Cyan
-    $funcPlanOk = Test-Resource -Name "Function App Plan" -Type "Plan" -ResourceGroup $ResourceGroupName -TestCommand {
-        az functionapp plan show --name $outputs.functionPlanName.value --resource-group $ResourceGroupName -o json 2>$null
-    }
+    $funcPlanOk = Test-Resource -Name "Function App Plan" -Command "az functionapp plan show --name $($outputs.functionPlanName.value) --resource-group $ResourceGroupName -o json --only-show-errors"
     $allPassed = $allPassed -and $funcPlanOk
 
-    $funcOk = Test-Resource -Name "Function App" -Type "Function" -ResourceGroup $ResourceGroupName -TestCommand {
-        az functionapp show --name $outputs.functionAppName.value --resource-group $ResourceGroupName -o json 2>$null
-    }
+    $funcOk = Test-Resource -Name "Function App" -Command "az functionapp show --name $($outputs.functionAppName.value) --resource-group $ResourceGroupName -o json --only-show-errors"
     $allPassed = $allPassed -and $funcOk
 
     Write-Host ""
@@ -171,16 +150,12 @@ try {
         Write-Host "Common Infrastructure (Shared):" -ForegroundColor Cyan
         Write-Host "Resource Group: $CommonInfraResourceGroup" -ForegroundColor Gray
 
-        $cosmosOk = Test-Resource -Name "Cosmos DB Account" -Type "CosmosDB" -ResourceGroup $CommonInfraResourceGroup -TestCommand {
-            az cosmosdb show --name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup -o json 2>$null
-        }
+        $cosmosOk = Test-Resource -Name "Cosmos DB Account" -Command "az cosmosdb show --name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup -o json --only-show-errors"
         $allPassed = $allPassed -and $cosmosOk
 
         if ($cosmosOk) {
             $dbName = $outputs.cosmosDatabaseName.value
-            $dbOk = Test-Resource -Name "Database ($dbName)" -Type "Database" -ResourceGroup $CommonInfraResourceGroup -TestCommand {
-                az cosmosdb sql database show --account-name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup --name $dbName -o json 2>$null
-            }
+            $dbOk = Test-Resource -Name "Database ($dbName)" -Command "az cosmosdb sql database show --account-name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup --name $dbName -o json --only-show-errors"
             $allPassed = $allPassed -and $dbOk
 
             # Check containers
@@ -189,18 +164,14 @@ try {
                 $containers = $outputs.cosmosContainers.value.PSObject.Properties | ForEach-Object { $_.Value }
                 $containerOk = $true
                 foreach ($container in $containers) {
-                    $exists = Test-Resource -Name "    $container" -Type "Container" -ResourceGroup $CommonInfraResourceGroup -TestCommand {
-                        az cosmosdb sql container show --account-name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup --database-name $dbName --name $container -o json 2>$null
-                    }
+                    $exists = Test-Resource -Name "    $container" -Command "az cosmosdb sql container show --account-name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup --database-name $dbName --name $container -o json --only-show-errors"
                     $containerOk = $containerOk -and $exists
                 }
                 $allPassed = $allPassed -and $containerOk
             }
         }
 
-        $acrOk = Test-Resource -Name "Container Registry" -Type "ACR" -ResourceGroup $CommonInfraResourceGroup -TestCommand {
-            az acr show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json 2>$null
-        }
+        $acrOk = Test-Resource -Name "Container Registry" -Command "az acr show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json --only-show-errors"
         $allPassed = $allPassed -and $acrOk
 
         Write-Host ""
@@ -211,18 +182,14 @@ try {
         Write-Host "Docker Images:" -ForegroundColor Cyan
         $acrLoginServer = $outputs.containerRegistryLoginServer.value
 
-        $apiImageOk = Test-Resource -Name "API Image" -Type "Image" -ResourceGroup $CommonInfraResourceGroup -TestCommand {
-            az acr repository show --name $CommonAcrName --image ai-hedge-fund-api:latest -o json 2>$null
-        }
+        $apiImageOk = Test-Resource -Name "API Image" -Command "az acr repository show --name $CommonAcrName --image ai-hedge-fund-api:latest -o json --only-show-errors"
         if ($apiImageOk) {
             Write-Host "    Image: ${acrLoginServer}/ai-hedge-fund-api:latest" -ForegroundColor Gray
         } else {
             Write-Host "    Note: API image not found. Build and push required." -ForegroundColor Yellow
         }
 
-        $workerImageOk = Test-Resource -Name "Worker Image" -Type "Image" -ResourceGroup $CommonInfraResourceGroup -TestCommand {
-            az acr repository show --name $CommonAcrName --image ai-hedge-fund-worker:latest -o json 2>$null
-        }
+        $workerImageOk = Test-Resource -Name "Worker Image" -Command "az acr repository show --name $CommonAcrName --image ai-hedge-fund-worker:latest -o json --only-show-errors"
         if ($workerImageOk) {
             Write-Host "    Image: ${acrLoginServer}/ai-hedge-fund-worker:latest" -ForegroundColor Gray
         } else {
