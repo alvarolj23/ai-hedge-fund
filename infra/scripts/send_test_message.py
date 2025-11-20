@@ -32,8 +32,19 @@ def load_deployment_info():
         print("Run deploy-with-common-infra.ps1 first to create infrastructure.")
         sys.exit(1)
 
-    with open(deployment_file, "r") as f:
-        outputs = json.load(f)
+    try:
+        with open(deployment_file, "r", encoding="utf-8-sig") as f:
+            content = f.read()
+            if not content.strip():
+                print(f"ERROR: Deployment file is empty: {deployment_file}")
+                print("Run deploy-with-common-infra.ps1 to recreate the deployment configuration.")
+                sys.exit(1)
+            outputs = json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON in deployment file: {deployment_file}")
+        print(f"JSON Error: {e}")
+        print("Run deploy-with-common-infra.ps1 to recreate the deployment configuration.")
+        sys.exit(1)
 
     return outputs
 
@@ -41,18 +52,23 @@ def load_deployment_info():
 def get_connection_string(storage_account_name):
     """Get storage account connection string using Azure CLI."""
     import subprocess
+    import platform
+
+    # On Windows, use az.cmd; on Unix, use az
+    az_command = "az.cmd" if platform.system() == "Windows" else "az"
 
     try:
         result = subprocess.run(
             [
-                "az", "storage", "account", "show-connection-string",
+                az_command, "storage", "account", "show-connection-string",
                 "--name", storage_account_name,
                 "--resource-group", "rg-ai-hedge-fund-prod",
                 "--output", "tsv"
             ],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
+            shell=True  # Use shell on Windows to resolve .cmd files
         )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
@@ -80,9 +96,8 @@ def send_message(queue_client, message_data):
     try:
         response = queue_client.send_message(message_json)
         print(f"\n✅ Message sent successfully!")
-        print(f"   Message ID: {response.id}")
-        print(f"   Insertion Time: {response.insertion_time}")
-        print(f"   Expiration Time: {response.expiration_time}")
+        print(f"   Message ID: {response['id']}")
+        print(f"   Pop Receipt: {response['pop_receipt']}")
         return response
     except Exception as e:
         print(f"\n❌ Failed to send message: {e}")
