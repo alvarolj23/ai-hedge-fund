@@ -1,0 +1,79 @@
+﻿{
+    "apiContainerAppName":  {
+                                "type":  "String",
+                                "value":  "aihedgefund-api"
+                            },
+    "appInsightsName":  {
+                            "type":  "String",
+                            "value":  "aihedgefund-appi"
+                        },
+    "containerRegistryLoginServer":  {
+                                         "type":  "String",
+                                         "value":  "acrcryptoanalysisprodcqpvo3njb4joq.azurecr.io"
+                                     },
+    "containerRegistryName":  {
+                                  "type":  "String",
+                                  "value":  "acrcryptoanalysisprodcqpvo3njb4joq"
+                              },
+    "cosmosAccountName":  {
+                              "type":  "String",
+                              "value":  "cosmos-cryptoanalysis-prod-cqpvo3njb4joq"
+                          },
+    "cosmosContainers":  {
+                             "type":  "Object",
+                             "value":  {
+                                           "analystSignals":  "analyst-signals",
+                                           "brokerOrders":  "broker-orders",
+                                           "decisions":  "decisions",
+                                           "monitorCooldowns":  "monitor-cooldowns",
+                                           "portfolios":  "portfolios",
+                                           "runResults":  "hedgeFundResults",
+                                           "runStatus":  "hedgeFundStatus",
+                                           "snapshots":  "portfolioSnapshots"
+                                       }
+                         },
+    "cosmosDatabaseName":  {
+                               "type":  "String",
+                               "value":  "ai-hedge-fund"
+                           },
+    "cosmosEndpoint":  {
+                           "type":  "String",
+                           "value":  "https://cosmos-cryptoanalysis-prod-cqpvo3njb4joq.documents.azure.com:443/"
+                       },
+    "functionAppName":  {
+                            "type":  "String",
+                            "value":  "aihedgefund-monitor"
+                        },
+    "functionPlanName":  {
+                             "type":  "String",
+                             "value":  "aihedgefund-func-plan"
+                         },
+    "logAnalyticsWorkspaceId":  {
+                                    "type":  "String",
+                                    "value":  "/subscriptions/052a660f-155b-47e9-9e3a-67edf5f585e1/resourceGroups/rg-ai-hedge-fund-prod/providers/Microsoft.OperationalInsights/workspaces/aihedgefund-law"
+                                },
+    "managedEnvironmentName":  {
+                                   "type":  "String",
+                                   "value":  "aihedgefund-cae"
+                               },
+    "queueWorkerJobName":  {
+                               "type":  "String",
+                               "value":  "aihedgefund-queuejob"
+                           },
+    "storageAccountName":  {
+                               "type":  "String",
+                               "value":  "aihedgefundstedriebl4q34"
+                           },
+    "storageConnectionString":  {
+                                    "type":  "String",
+                                    "value":  ""
+                                },
+    "storageDeadLetterQueueName":  {
+                                       "type":  "String",
+                                       "value":  "analysis-deadletter"
+                                   },
+    "storageQueueName":  {
+                             "type":  "String",
+                             "value":  "analysis-requests"
+                         }
+}
