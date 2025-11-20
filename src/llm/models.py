@@ -129,7 +129,57 @@ def get_models_list():
     ]
 
 
-def get_model(model_name: str, model_provider: ModelProvider, api_keys: dict = None) -> ChatOpenAI | ChatGroq | ChatOllama | GigaChat | None:
+def normalize_model_provider(provider: str | ModelProvider) -> ModelProvider:
+    """Normalize model provider string to ModelProvider enum.
+
+    Handles various string formats like "Azure", "Azure OpenAI", "AZURE_OPENAI", etc.
+    """
+    # If already a ModelProvider enum, return as-is
+    if isinstance(provider, ModelProvider):
+        return provider
+
+    # Normalize string: strip, lowercase, remove underscores/hyphens
+    normalized = str(provider).strip().lower().replace("_", " ").replace("-", " ")
+
+    # Map common variations to enum values
+    provider_map = {
+        "azure": ModelProvider.AZURE_OPENAI,
+        "azure openai": ModelProvider.AZURE_OPENAI,
+        "azureopenai": ModelProvider.AZURE_OPENAI,
+        "openai": ModelProvider.OPENAI,
+        "groq": ModelProvider.GROQ,
+        "anthropic": ModelProvider.ANTHROPIC,
+        "claude": ModelProvider.ANTHROPIC,
+        "deepseek": ModelProvider.DEEPSEEK,
+        "google": ModelProvider.GOOGLE,
+        "gemini": ModelProvider.GOOGLE,
+        "ollama": ModelProvider.OLLAMA,
+        "openrouter": ModelProvider.OPENROUTER,
+        "gigachat": ModelProvider.GIGACHAT,
+        "xai": ModelProvider.XAI,
+        "grok": ModelProvider.XAI,
+    }
+
+    result = provider_map.get(normalized)
+    if result:
+        return result
+
+    # Try direct enum value match (case-insensitive)
+    for member in ModelProvider:
+        if member.value.lower() == normalized or member.name.lower() == normalized:
+            return member
+
+    # If no match found, raise error with helpful message
+    raise ValueError(
+        f"Unknown model provider: '{provider}'. "
+        f"Supported providers: {', '.join(m.value for m in ModelProvider)}"
+    )
+
+
+def get_model(model_name: str, model_provider: ModelProvider | str, api_keys: dict = None) -> ChatOpenAI | ChatGroq | ChatOllama | GigaChat | None:
+    # Normalize provider to enum
+    model_provider = normalize_model_provider(model_provider)
+
     if model_provider == ModelProvider.GROQ:
         api_key = (api_keys or {}).get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
         if not api_key:
