@@ -90,29 +90,32 @@ jobs:
           # List all deployments for debugging
           az deployment group list \
             --resource-group "$RESOURCE_GROUP" \
-            --query "[].{Name:name, State:properties.provisioningState, Timestamp:properties.timestamp}" \
+            --query "[].{Name:name, State:properties.provisioningState, Timestamp:properties.timestamp, HasOutputs:properties.outputs != null}" \
             -o table || true
 
-          # Get the latest successful deployment
+          # Get the latest successful deployment that has outputs
+          # Filter out auto-generated deployments (Application Insights, etc.) by requiring outputs
           deployment_json=$(az deployment group list \
             --resource-group "$RESOURCE_GROUP" \
-            --query "max_by([?properties.provisioningState=='Succeeded'], &properties.timestamp).properties" \
+            --query "max_by([?properties.provisioningState=='Succeeded' && properties.outputs != null], &properties.timestamp).properties" \
             -o json)
 
           if [ -z "$deployment_json" ] || [ "$deployment_json" = "null" ]; then
-            echo "ERROR: No successful deployments found in resource group $RESOURCE_GROUP" >&2
+            echo "ERROR: No successful deployments with outputs found in resource group $RESOURCE_GROUP" >&2
             echo "" >&2
-            echo "This workflow requires infrastructure to be deployed first." >&2
+            echo "This workflow requires infrastructure to be deployed with outputs." >&2
             echo "Run locally: infra/scripts/deploy-with-common-infra.ps1" >&2
             echo "" >&2
             echo "All deployments in resource group:" >&2
-            az deployment group list --resource-group "$RESOURCE_GROUP" -o table || true
+            az deployment group list --resource-group "$RESOURCE_GROUP" \
+              --query "[].{Name:name, State:properties.provisioningState, HasOutputs:properties.outputs != null}" \
+              -o table || true
             exit 1
           fi
 
           outputs=$(echo "$deployment_json" | jq -r '.outputs')
           if [ -z "$outputs" ] || [ "$outputs" = "null" ]; then
-            echo "ERROR: Deployment did not return outputs." >&2
+            echo "ERROR: Deployment did not return outputs (this should not happen after filter)." >&2
             echo "Deployment properties:" >&2
             echo "$deployment_json" | jq '.' >&2
             exit 1
