@@ -129,6 +129,9 @@ class CosmosOrderStore:
             return None
 
         order_id = base.get("order_id") or str(uuid.uuid4())
+        # Ensure order_id is a string (convert UUID objects if necessary)
+        if order_id is not None:
+            order_id = str(order_id)
         base.setdefault("id", order_id)
         base.setdefault("broker", "alpaca")
         base.setdefault("status", "unknown")

@@ -260,6 +260,8 @@ class PaperBroker:
 
     def _to_broker_order(self, *, ticker: str, action: str, quantity: int, side: str, response: Any) -> BrokerOrder:
         order_id = getattr(response, "id", None)
+        if order_id is not None:
+            order_id = str(order_id)  # Convert UUID to string for Cosmos DB compatibility
         status = getattr(response, "status", "submitted")
         submitted_at = _isoformat(getattr(response, "submitted_at", None))
         filled_at = _isoformat(getattr(response, "filled_at", None))
