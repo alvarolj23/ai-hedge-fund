@@ -15,11 +15,11 @@ from src.utils.progress import progress
 def safe_float(value, default=0.0):
     """
     Safely convert a value to float, handling NaN cases
-    
+
     Args:
         value: The value to convert (can be pandas scalar, numpy value, etc.)
         default: Default value to return if the input is NaN or invalid
-    
+
     Returns:
         float: The converted value or default if NaN/invalid
     """
@@ -27,6 +27,25 @@ def safe_float(value, default=0.0):
         if pd.isna(value) or np.isnan(value):
             return default
         return float(value)
+    except (ValueError, TypeError, OverflowError):
+        return default
+
+
+def safe_confidence(value, default=50):
+    """
+    Safely convert confidence value to rounded integer percentage, handling NaN cases
+
+    Args:
+        value: The confidence value (0.0-1.0 scale)
+        default: Default value to return if the input is NaN or invalid (default 50%)
+
+    Returns:
+        int: The confidence as percentage (0-100) or default if NaN/invalid
+    """
+    try:
+        if pd.isna(value) or np.isnan(value) or math.isnan(value):
+            return default
+        return round(float(value) * 100)
     except (ValueError, TypeError, OverflowError):
         return default
 
@@ -106,31 +125,31 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
         # Generate detailed analysis report for this ticker
         technical_analysis[ticker] = {
             "signal": combined_signal["signal"],
-            "confidence": round(combined_signal["confidence"] * 100),
+            "confidence": safe_confidence(combined_signal["confidence"]),
             "reasoning": {
                 "trend_following": {
                     "signal": trend_signals["signal"],
-                    "confidence": round(trend_signals["confidence"] * 100),
+                    "confidence": safe_confidence(trend_signals["confidence"]),
                     "metrics": normalize_pandas(trend_signals["metrics"]),
                 },
                 "mean_reversion": {
                     "signal": mean_reversion_signals["signal"],
-                    "confidence": round(mean_reversion_signals["confidence"] * 100),
+                    "confidence": safe_confidence(mean_reversion_signals["confidence"]),
                     "metrics": normalize_pandas(mean_reversion_signals["metrics"]),
                 },
                 "momentum": {
                     "signal": momentum_signals["signal"],
-                    "confidence": round(momentum_signals["confidence"] * 100),
+                    "confidence": safe_confidence(momentum_signals["confidence"]),
                     "metrics": normalize_pandas(momentum_signals["metrics"]),
                 },
                 "volatility": {
                     "signal": volatility_signals["signal"],
-                    "confidence": round(volatility_signals["confidence"] * 100),
+                    "confidence": safe_confidence(volatility_signals["confidence"]),
                     "metrics": normalize_pandas(volatility_signals["metrics"]),
                 },
                 "statistical_arbitrage": {
                     "signal": stat_arb_signals["signal"],
-                    "confidence": round(stat_arb_signals["confidence"] * 100),
+                    "confidence": safe_confidence(stat_arb_signals["confidence"]),
                     "metrics": normalize_pandas(stat_arb_signals["metrics"]),
                 },
             },

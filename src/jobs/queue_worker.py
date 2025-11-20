@@ -308,11 +308,13 @@ class QueueWorker:
         )
 
         if not (start_date and end_date):
-            lookback_days = payload.get("lookback_days") or payload.get("lookback") or os.getenv("QUEUE_DEFAULT_LOOKBACK_DAYS", "30")
+            # Default to 180 days to ensure sufficient data for technical analysis
+            # Technical indicators require at least 126 trading days (6 months)
+            lookback_days = payload.get("lookback_days") or payload.get("lookback") or os.getenv("QUEUE_DEFAULT_LOOKBACK_DAYS", "180")
             try:
                 lookback_days_int = int(lookback_days)
             except (TypeError, ValueError):
-                lookback_days_int = 30
+                lookback_days_int = 180
 
             now = datetime.now(timezone.utc)
             start_date = (now - timedelta(days=lookback_days_int)).strftime('%Y-%m-%d')
