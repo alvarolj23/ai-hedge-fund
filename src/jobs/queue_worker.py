@@ -49,9 +49,11 @@ class FlexibleTextDecodePolicy(TextBase64DecodePolicy):
     def decode(self, content, response):  # type: ignore[override]
         try:
             return super().decode(content, response)
-        except DecodeError:
+        except Exception:
+            # Catch ALL exceptions including DecodeError and AttributeError
             # Messages pushed via CLI or other tooling may already be plain JSON.
             # Fall back to the raw content so we can still process them.
+            logger.debug("Failed to decode base64 message, using raw content: %s", content[:100])
             return content
 
 
