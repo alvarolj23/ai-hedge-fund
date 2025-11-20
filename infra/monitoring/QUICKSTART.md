@@ -16,7 +16,7 @@ That's it! The script handles everything.
 ## What the Script Does
 
 1. Packages your function + minimal dependencies (~30KB)
-2. Deploys to `hedgefund-monitor` in `rg-ai-hedge-fund`
+2. Deploys to `hedgefund-monitor` in `rg-ai-hedge-fund-prod`
 3. Shows you the status and Azure Portal link
 
 ## Required Environment Variables
@@ -37,14 +37,14 @@ Make sure these are set in your Function App (check Azure Portal):
 
 **View logs:**
 ```powershell
-az functionapp log tail --name hedgefund-monitor --resource-group rg-ai-hedge-fund
+az functionapp log tail --name hedgefund-monitor --resource-group rg-ai-hedge-fund-prod
 ```
 
 **Manual trigger (for testing):**
 ```powershell
 az functionapp function invoke `
     --name hedgefund-monitor `
-    --resource-group rg-ai-hedge-fund `
+    --resource-group rg-ai-hedge-fund-prod `
     --function-name market_monitor
 ```
 
@@ -52,7 +52,7 @@ az functionapp function invoke `
 ```powershell
 az functionapp config appsettings set `
     --name hedgefund-monitor `
-    --resource-group rg-ai-hedge-fund `
+    --resource-group rg-ai-hedge-fund-prod `
     --settings "MARKET_MONITOR_WATCHLIST=AAPL,MSFT,NVDA,TSLA"
 ```
 

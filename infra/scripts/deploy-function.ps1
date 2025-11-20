@@ -2,8 +2,8 @@
 # This script packages and deploys the market monitoring function
 
 param(
-    [string]$FunctionAppName = "hedgefund-monitor",
-    [string]$ResourceGroup = "rg-ai-hedge-fund"
+    [string]$FunctionAppName = "aihedgefund-monitor",
+    [string]$ResourceGroup = "rg-ai-hedge-fund-prod"
 )
 
 $ErrorActionPreference = "Stop"
