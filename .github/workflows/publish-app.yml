@@ -85,19 +85,36 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Querying deployments in resource group: $RESOURCE_GROUP"
+          
+          # List all deployments for debugging
+          az deployment group list \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[].{Name:name, State:properties.provisioningState, Timestamp:properties.timestamp}" \
+            -o table || true
+
+          # Get the latest successful deployment
           deployment_json=$(az deployment group list \
             --resource-group "$RESOURCE_GROUP" \
             --query "max_by([?properties.provisioningState=='Succeeded'], &properties.timestamp).properties" \
             -o json)
 
           if [ -z "$deployment_json" ] || [ "$deployment_json" = "null" ]; then
-            echo "No successful deployments found in resource group $RESOURCE_GROUP" >&2
+            echo "ERROR: No successful deployments found in resource group $RESOURCE_GROUP" >&2
+            echo "" >&2
+            echo "This workflow requires infrastructure to be deployed first." >&2
+            echo "Run locally: infra/scripts/deploy-with-common-infra.ps1" >&2
+            echo "" >&2
+            echo "All deployments in resource group:" >&2
+            az deployment group list --resource-group "$RESOURCE_GROUP" -o table || true
             exit 1
           fi
 
           outputs=$(echo "$deployment_json" | jq -r '.outputs')
           if [ -z "$outputs" ] || [ "$outputs" = "null" ]; then
-            echo "Deployment did not return outputs. Ensure infra/scripts/deploy-infrastructure.ps1 was run." >&2
+            echo "ERROR: Deployment did not return outputs." >&2
+            echo "Deployment properties:" >&2
+            echo "$deployment_json" | jq '.' >&2
             exit 1
           fi
 
@@ -110,6 +127,13 @@ jobs:
           job_name=$(echo "$outputs" | jq -r '.queueWorkerJobName.value')
           function_app_name=$(echo "$outputs" | jq -r '.functionAppName.value')
 
+          echo "Extracted outputs:"
+          echo "  ACR Name: $acr_name"
+          echo "  ACR Server: $acr_login_server"
+          echo "  API App: $api_app_name"
+          echo "  Job: $job_name"
+          echo "  Function: $function_app_name"
+
           required=0
           for value in "$acr_name" "$acr_login_server" "$api_app_name" "$job_name" "$function_app_name"; do
             if [ "$value" = "null" ] || [ -z "$value" ]; then
@@ -118,7 +142,8 @@ jobs:
           done
 
           if [ "$required" -ne 0 ]; then
-            echo "Missing expected outputs in deployment metadata. Check the Bicep outputs." >&2
+            echo "ERROR: Missing required outputs in deployment metadata." >&2
+            echo "Full outputs:" >&2
             cat infra/scripts/latest-deployment.json
             exit 1
           fi
