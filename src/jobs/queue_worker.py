@@ -315,8 +315,27 @@ class QueueWorker:
                 lookback_days_int = 30
 
             now = datetime.now(timezone.utc)
-            start_date = (now - timedelta(days=lookback_days_int)).isoformat()
-            end_date = now.isoformat()
+            start_date = (now - timedelta(days=lookback_days_int)).strftime('%Y-%m-%d')
+            end_date = now.strftime('%Y-%m-%d')
+
+        # Normalize dates to YYYY-MM-DD format (Financial Datasets API requirement)
+        def normalize_date(date_str: str) -> str:
+            """Convert ISO timestamp or date string to YYYY-MM-DD format."""
+            if not date_str:
+                return date_str
+            # If already in YYYY-MM-DD format, return as-is
+            if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+                return date_str
+            # Try to parse ISO timestamp and extract date
+            try:
+                dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return dt.strftime('%Y-%m-%d')
+            except (ValueError, AttributeError):
+                # If parsing fails, try to extract first 10 characters
+                return date_str[:10] if len(date_str) >= 10 else date_str
+
+        start_date = normalize_date(start_date)
+        end_date = normalize_date(end_date)
 
         overrides = payload.get("overrides") or {}
         if overrides and not isinstance(overrides, dict):
