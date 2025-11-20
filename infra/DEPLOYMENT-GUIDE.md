@@ -205,23 +205,44 @@ RESOURCE_GROUP = "rg-ai-hedge-fund-prod"
 
 2. **`DEPLOYMENT_CONFIG`** - Application settings and API keys:
    ```json
-   {
-     "apiAppSettings": {
-       "OPENAI_API_KEY": "sk-your-openai-key",
-       "FINANCIAL_DATASETS_API_KEY": "your-financial-datasets-key"
-     },
-     "workerAppSettings": {
-       "OPENAI_API_KEY": "sk-your-openai-key",
-       "FINANCIAL_DATASETS_API_KEY": "your-financial-datasets-key",
-       "ALPACA_API_KEY": "your-alpaca-key",
-       "ALPACA_SECRET_KEY": "your-alpaca-secret",
-       "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
-       "TRADE_MODE": "paper"
-     },
-     "functionAppSettings": {
-       "TICKERS": "AAPL,GOOGL,MSFT,NVDA,TSLA"
-     }
-   }
+    {
+      "containerApp": {
+        "secrets": {
+          "OPENAI_API_KEY": "sk-your-key",
+          "FINANCIAL_DATASETS_API_KEY": "your-key",
+          "ALPACA_API_KEY_ID": "your-alpaca-key",
+          "ALPACA_API_SECRET_KEY": "your-alpaca-secret",
+          "ALPACA_API_BASE_URL": "https://paper-api.alpaca.markets"
+        },
+        "environmentVariables": {
+          "TRADE_MODE": "paper",
+          "ALPACA_CONFIDENCE_THRESHOLD": "65"
+        }
+      },
+      "queueWorker": {
+        "secrets": {
+          "OPENAI_API_KEY": "sk-your-key",
+          "FINANCIAL_DATASETS_API_KEY": "your-key",
+          "ALPACA_API_KEY_ID": "your-alpaca-key",
+          "ALPACA_API_SECRET_KEY": "your-alpaca-secret",
+          "ALPACA_API_BASE_URL": "https://paper-api.alpaca.markets"
+        },
+        "environmentVariables": {
+          "MODEL_PROVIDER": "OpenAI",
+          "MODEL_NAME": "gpt-4o",
+          "CONFIDENCE_THRESHOLD": "60"
+        }
+      },
+      "functionApp": {
+        "appSettings": {
+          "FINANCIAL_DATASETS_API_KEY": "your-key",
+          "MARKET_MONITOR_WATCHLIST": "AAPL,MSFT,NVDA,GOOGL,TSLA",
+          "MARKET_MONITOR_PERCENT_CHANGE_THRESHOLD": "0.02",
+          "MARKET_MONITOR_VOLUME_SPIKE_MULTIPLIER": "1.5",
+          "MARKET_MONITOR_ANALYSIS_WINDOW_MINUTES": "120"
+        }
+      }
+    }
    ```
 
    **Important:** Replace all placeholder keys with your actual API keys!
@@ -237,6 +258,8 @@ RESOURCE_GROUP = "rg-ai-hedge-fund-prod"
 4. Click **Run workflow**
 5. Leave image tags empty (will use commit SHA)
 6. Click **Run workflow**
+
+**IMPORTANT**: Make sure the latest-deployment.json doesn't contain any secret. Otherwise it won't be pushed to GitHub. 
 
 **Option B: Using GitHub CLI** (if installed)
 ```powershell
