@@ -79,53 +79,83 @@ try {
     # Verify common infrastructure exists
     Write-Host "Step 2: Verifying common infrastructure..." -ForegroundColor Cyan
 
-    # Check Cosmos DB (handle corporate SSL/proxy warnings)
-    $previousErrorAction = $ErrorActionPreference
+    # Suppress Python warnings for Azure CLI SSL/certificate issues
+    $env:PYTHONWARNINGS = "ignore"
+    $currentErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try {
-        $cosmos = az cosmosdb show --name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup -o json 2>&1 | Where-Object { $_ -notmatch 'WARNING' }
-        if (-not $cosmos -or $cosmos -match 'ERROR' -or $cosmos -match 'ResourceNotFound') {
-            throw "Cosmos DB account '$CommonCosmosAccountName' not found in '$CommonInfraResourceGroup'"
-        }
-        Write-Host "  Cosmos DB verified: $CommonCosmosAccountName" -ForegroundColor Green
-    }
-    finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
 
-    # Check ACR (handle corporate SSL/proxy warnings)
-    $ErrorActionPreference = 'Continue'
-    try {
-        $acr = az acr show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json 2>&1 | Where-Object { $_ -notmatch 'WARNING' }
-        if (-not $acr -or $acr -match 'ERROR' -or $acr -match 'ResourceNotFound') {
-            throw "Container Registry '$CommonAcrName' not found in '$CommonInfraResourceGroup'"
-        }
-        $acrData = $acr | ConvertFrom-Json
-        $acrLoginServer = $acrData.loginServer
-        Write-Host "  ACR verified: $CommonAcrName ($acrLoginServer)" -ForegroundColor Green
-        Write-Host ""
+    # Check Cosmos DB
+    $cosmosRawOutput = az cosmosdb show --name $CommonCosmosAccountName --resource-group $CommonInfraResourceGroup -o json --only-show-errors 2>&1
+    $cosmosExitCode = $LASTEXITCODE
+    
+    # Filter out warning messages
+    $cosmosJson = ($cosmosRawOutput | Where-Object { 
+        $_ -notmatch 'InsecureRequestWarning' -and 
+        $_ -notmatch 'Connection verification disabled' -and 
+        $_ -notmatch 'urllib3/connectionpool' -and
+        $_ -notmatch 'WARNING:' -and
+        $_ -notmatch 'https://urllib3.readthedocs.io' -and
+        $_ -notmatch 'AZURE_CLI_DISABLE_CONNECTION_VERIFICATION'
+    }) -join "`n"
+    
+    if ($cosmosExitCode -ne 0 -or -not $cosmosJson -or $cosmosJson -match 'ERROR' -or $cosmosJson -match 'ResourceNotFound') {
+        $ErrorActionPreference = $currentErrorActionPreference
+        throw "Cosmos DB account '$CommonCosmosAccountName' not found in '$CommonInfraResourceGroup'"
     }
-    finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
+    Write-Host "  Cosmos DB verified: $CommonCosmosAccountName" -ForegroundColor Green
 
-    # Get ACR credentials (handle corporate SSL/proxy warnings)
+    # Check ACR
+    $acrRawOutput = az acr show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json --only-show-errors 2>&1
+    $acrExitCode = $LASTEXITCODE
+    
+    # Filter out warning messages
+    $acrJson = ($acrRawOutput | Where-Object { 
+        $_ -notmatch 'InsecureRequestWarning' -and 
+        $_ -notmatch 'Connection verification disabled' -and 
+        $_ -notmatch 'urllib3/connectionpool' -and
+        $_ -notmatch 'WARNING:' -and
+        $_ -notmatch 'https://urllib3.readthedocs.io' -and
+        $_ -notmatch 'AZURE_CLI_DISABLE_CONNECTION_VERIFICATION'
+    }) -join "`n"
+    
+    if ($acrExitCode -ne 0 -or -not $acrJson -or $acrJson -match 'ERROR' -or $acrJson -match 'ResourceNotFound') {
+        $ErrorActionPreference = $currentErrorActionPreference
+        throw "Container Registry '$CommonAcrName' not found in '$CommonInfraResourceGroup'"
+    }
+    
+    $acrData = $acrJson | ConvertFrom-Json
+    $acrLoginServer = $acrData.loginServer
+    Write-Host "  ACR verified: $CommonAcrName ($acrLoginServer)" -ForegroundColor Green
+    Write-Host ""
+
+    # Get ACR credentials
     Write-Host "Step 3: Retrieving ACR credentials..." -ForegroundColor Cyan
-    $ErrorActionPreference = 'Continue'
-    try {
-        $acrCredJson = az acr credential show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json 2>&1 | Where-Object { $_ -notmatch 'WARNING' }
-        if (-not $acrCredJson -or $acrCredJson -match 'ERROR') {
-            throw "Failed to retrieve ACR credentials. Ensure admin user is enabled on the ACR."
-        }
-        $acrCredentials = $acrCredJson | ConvertFrom-Json
-        $acrUsername = $acrCredentials.username
-        $acrPassword = $acrCredentials.passwords[0].value
-        Write-Host "  ACR credentials retrieved" -ForegroundColor Green
-        Write-Host ""
+    $acrCredRawOutput = az acr credential show --name $CommonAcrName --resource-group $CommonInfraResourceGroup -o json --only-show-errors 2>&1
+    $acrCredExitCode = $LASTEXITCODE
+    
+    # Filter out warning messages
+    $acrCredJson = ($acrCredRawOutput | Where-Object { 
+        $_ -notmatch 'InsecureRequestWarning' -and 
+        $_ -notmatch 'Connection verification disabled' -and 
+        $_ -notmatch 'urllib3/connectionpool' -and
+        $_ -notmatch 'WARNING:' -and
+        $_ -notmatch 'https://urllib3.readthedocs.io' -and
+        $_ -notmatch 'AZURE_CLI_DISABLE_CONNECTION_VERIFICATION'
+    }) -join "`n"
+    
+    if ($acrCredExitCode -ne 0 -or -not $acrCredJson -or $acrCredJson -match 'ERROR') {
+        $ErrorActionPreference = $currentErrorActionPreference
+        throw "Failed to retrieve ACR credentials. Ensure admin user is enabled on the ACR."
     }
-    finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
+    
+    $acrCredentials = $acrCredJson | ConvertFrom-Json
+    $acrUsername = $acrCredentials.username
+    $acrPassword = $acrCredentials.passwords[0].value
+    Write-Host "  ACR credentials retrieved" -ForegroundColor Green
+    Write-Host ""
+    
+    # Restore error action preference
+    $ErrorActionPreference = $currentErrorActionPreference
 
     # Setup Cosmos DB
     if (-not $SkipCosmosSetup) {

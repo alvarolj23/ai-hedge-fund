@@ -26,6 +26,9 @@ param(
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
+# Suppress Python warnings for Azure CLI SSL/certificate issues
+$env:PYTHONWARNINGS = "ignore"
+
 function Test-Resource {
     param(
         [string]$Name,
@@ -36,8 +39,21 @@ function Test-Resource {
 
     Write-Host "  Checking $Name..." -NoNewline
     try {
-        $result = & $TestCommand
-        if ($LASTEXITCODE -eq 0 -and $result) {
+        # Capture output and filter warnings
+        $rawOutput = & $TestCommand 2>&1
+        $exitCode = $LASTEXITCODE
+        
+        # Filter out SSL/certificate warnings
+        $result = $rawOutput | Where-Object { 
+            $_ -notmatch 'InsecureRequestWarning' -and 
+            $_ -notmatch 'Connection verification disabled' -and 
+            $_ -notmatch 'urllib3/connectionpool' -and
+            $_ -notmatch 'WARNING:' -and
+            $_ -notmatch 'https://urllib3.readthedocs.io' -and
+            $_ -notmatch 'AZURE_CLI_DISABLE_CONNECTION_VERIFICATION'
+        }
+        
+        if ($exitCode -eq 0 -and $result) {
             Write-Host " OK" -ForegroundColor Green
             return $true
         } else {
@@ -58,7 +74,7 @@ try {
     Write-Host ""
 
     # Set subscription
-    az account set --subscription $SubscriptionId --only-show-errors
+    az account set --subscription $SubscriptionId --only-show-errors 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Failed to set subscription" -ForegroundColor Red
         exit 1
