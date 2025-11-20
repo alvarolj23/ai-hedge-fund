@@ -383,6 +383,10 @@ class QueueWorker:
         overrides = payload.get("overrides", {})
         raw_payload = payload.get("raw", {})
 
+        # Get model configuration from environment variables with fallbacks
+        default_model_provider = os.getenv("MODEL_PROVIDER", "OpenAI")
+        default_model_name = os.getenv("MODEL_NAME", "gpt-4.1")
+
         run_kwargs = {
             "tickers": payload["tickers"],
             "start_date": payload["start_date"],
@@ -390,8 +394,8 @@ class QueueWorker:
             "portfolio": portfolio_data,
             "show_reasoning": bool(overrides.get("show_reasoning", False)),
             "selected_analysts": overrides.get("selected_analysts", []) or [],
-            "model_name": overrides.get("model_name", "gpt-4.1"),
-            "model_provider": overrides.get("model_provider", "OpenAI"),
+            "model_name": overrides.get("model_name", default_model_name),
+            "model_provider": overrides.get("model_provider", default_model_provider),
             # Trade execution parameters
             "trade_mode": overrides.get("trade_mode", "paper" if use_alpaca else "analysis"),
             "dry_run": bool(overrides.get("dry_run", False)),
