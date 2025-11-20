@@ -222,8 +222,9 @@ def _compose_queue_payload(
     watchlist: Iterable[str],
 ) -> dict:
     # Calculate proper date range for analysis (not timestamps)
-    # Use lookback days from environment or default to 30 days
-    lookback_days = int(os.getenv("MARKET_MONITOR_ANALYSIS_LOOKBACK_DAYS", "30"))
+    # Technical analysis requires at least 126 trading days (6 months) for momentum indicators
+    # 180 calendar days ≈ 130 trading days, providing sufficient buffer
+    lookback_days = int(os.getenv("MARKET_MONITOR_ANALYSIS_LOOKBACK_DAYS", "180"))
 
     # End date is today, start date is lookback_days ago
     eastern_now = triggered_at.astimezone(EASTERN)
