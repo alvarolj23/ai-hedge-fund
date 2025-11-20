@@ -362,6 +362,8 @@ class QueueWorker:
             portfolio_snapshot_id = portfolio_snapshot.get("id")
 
         overrides = payload.get("overrides", {})
+        raw_payload = payload.get("raw", {})
+
         run_kwargs = {
             "tickers": payload["tickers"],
             "start_date": payload["start_date"],
@@ -371,6 +373,14 @@ class QueueWorker:
             "selected_analysts": overrides.get("selected_analysts", []) or [],
             "model_name": overrides.get("model_name", "gpt-4.1"),
             "model_provider": overrides.get("model_provider", "OpenAI"),
+            # Trade execution parameters
+            "trade_mode": overrides.get("trade_mode", "paper" if use_alpaca else "analysis"),
+            "dry_run": bool(overrides.get("dry_run", False)),
+            "confidence_threshold": overrides.get("confidence_threshold"),
+            # Tracking parameters
+            "user_id": raw_payload.get("user_id") or "queue-worker",
+            "strategy_id": raw_payload.get("strategy_id") or "default",
+            "run_id": message.id,
         }
 
         hedge_result = run_hedge_fund(**run_kwargs)

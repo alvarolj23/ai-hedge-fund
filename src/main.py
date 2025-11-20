@@ -352,6 +352,11 @@ def create_workflow(selected_analysts=None):
     return workflow
 
 
+# Create default compiled workflow for use when no analysts are specified
+# This is used by the queue worker and other non-CLI entry points
+app = create_workflow().compile()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the hedge fund trading system")
     parser.add_argument("--initial-cash", type=float, default=100000.0, help="Initial cash position. Defaults to 100000.0)")
