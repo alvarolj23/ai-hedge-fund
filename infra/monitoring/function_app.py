@@ -221,20 +221,31 @@ def _compose_queue_payload(
     summary: SignalSummary,
     watchlist: Iterable[str],
 ) -> dict:
-    window_end = triggered_at
-    window_start = triggered_at - dt.timedelta(minutes=analysis_window_minutes)
-    correlation_hints = {
-        "related_watchlist": [symbol for symbol in watchlist if symbol != ticker],
-        "basis": summary.reasons,
-    }
+    # Calculate proper date range for analysis (not timestamps)
+    # Use lookback days from environment or default to 30 days
+    lookback_days = int(os.getenv("MARKET_MONITOR_ANALYSIS_LOOKBACK_DAYS", "30"))
+
+    # End date is today, start date is lookback_days ago
+    eastern_now = triggered_at.astimezone(EASTERN)
+    end_date = eastern_now.date().isoformat()
+    start_date = (eastern_now.date() - dt.timedelta(days=lookback_days)).isoformat()
+
+    # Build the payload compatible with queue_worker.py expectations
     payload = {
+        # Required fields
         "tickers": [ticker],
+
+        # Date range for analysis (YYYY-MM-DD format)
         "analysis_window": {
-            "start": _isoformat(window_start),
-            "end": _isoformat(window_end),
+            "start": start_date,
+            "end": end_date,
         },
-        "correlation_hints": correlation_hints,
-        "signals": summary.reasons,
+
+        # User and strategy identification
+        "user_id": os.getenv("MARKET_MONITOR_USER_ID", "market-monitor"),
+        "strategy_id": os.getenv("MARKET_MONITOR_STRATEGY_ID", "auto-signal"),
+
+        # Market monitoring metadata (preserved for future use)
         "market_snapshot": {
             "percent_change": round(summary.percent_change, 6),
             "volume_ratio": round(summary.volume_ratio, 6) if summary.volume_ratio is not None else None,
@@ -243,7 +254,12 @@ def _compose_queue_payload(
             "latest_volume": summary.latest.volume,
             "average_volume": summary.average_volume,
         },
+        "signals": summary.reasons,
         "triggered_at": _isoformat(triggered_at),
+        "correlation_hints": {
+            "related_watchlist": [symbol for symbol in watchlist if symbol != ticker],
+            "basis": summary.reasons,
+        },
     }
     return payload
 
