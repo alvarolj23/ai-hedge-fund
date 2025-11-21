@@ -13,6 +13,7 @@ from enum import Enum
 from pydantic import BaseModel
 from typing import Tuple, List
 from pathlib import Path
+from contextlib import contextmanager
 
 
 class ModelProvider(str, Enum):
@@ -286,3 +287,60 @@ def get_model(model_name: str, model_provider: ModelProvider | str, api_keys: di
             print(f"Azure Deployment Name Error: Please make sure AZURE_OPENAI_DEPLOYMENT_NAME is set in your .env file.")
             raise ValueError("Azure OpenAI deployment name not found.  Please make sure AZURE_OPENAI_DEPLOYMENT_NAME is set in your .env file.")
         return AzureChatOpenAI(azure_endpoint=azure_endpoint, azure_deployment=azure_deployment_name, api_key=api_key, api_version="2024-10-21")
+
+
+def is_langsmith_enabled() -> bool:
+    """Check if LangSmith tracing is enabled via environment variables."""
+    tracing_enabled = os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true"
+    has_api_key = bool(os.getenv("LANGCHAIN_API_KEY"))
+    return tracing_enabled and has_api_key
+
+
+@contextmanager
+def langsmith_tracing_context(agent_name: str = None, metadata: dict = None, tags: list = None):
+    """
+    Context manager for LangSmith tracing that adds metadata and tags to LLM calls.
+
+    Args:
+        agent_name: Name of the agent/analyst making the LLM call (e.g., "warren_buffett", "technical_analyst")
+        metadata: Additional metadata to attach to the trace (e.g., {"ticker": "AAPL", "analysis_type": "fundamental"})
+        tags: List of tags to categorize the trace (e.g., ["analyst", "valuation"])
+
+    Example:
+        >>> with langsmith_tracing_context(agent_name="warren_buffett", metadata={"ticker": "AAPL"}, tags=["analyst", "value_investing"]):
+        ...     result = llm.invoke("Analyze this stock...")
+    """
+    # Only import langsmith if tracing is enabled to avoid dependency issues
+    if not is_langsmith_enabled():
+        yield
+        return
+
+    try:
+        import langsmith as ls
+
+        # Build metadata dict
+        trace_metadata = metadata or {}
+        if agent_name:
+            trace_metadata["agent_name"] = agent_name
+
+        # Build tags list
+        trace_tags = tags or []
+        if agent_name and agent_name not in trace_tags:
+            trace_tags.append(agent_name)
+
+        # Use LangSmith's tracing context
+        with ls.tracing_context(
+            project_name=os.getenv("LANGCHAIN_PROJECT", "ai-hedge-fund"),
+            metadata=trace_metadata,
+            tags=trace_tags,
+            enabled=True
+        ):
+            yield
+    except ImportError:
+        # If langsmith is not installed, just continue without tracing
+        print("Warning: langsmith package not installed. Install with: pip install langsmith")
+        yield
+    except Exception as e:
+        # If there's any error with tracing setup, log it but don't break the execution
+        print(f"Warning: Error setting up LangSmith tracing: {e}")
+        yield
