@@ -2,7 +2,7 @@
 
 import json
 from pydantic import BaseModel
-from src.llm.models import get_model, get_model_info
+from src.llm.models import get_model, get_model_info, langsmith_tracing_context
 from src.utils.progress import progress
 from src.graph.state import AgentState
 
@@ -55,19 +55,46 @@ def call_llm(
             method="json_mode",
         )
 
-    # Call the LLM with retries
+    # Build metadata for LangSmith tracing
+    trace_metadata = {
+        "model_name": model_name,
+        "model_provider": model_provider,
+        "pydantic_model": pydantic_model.__name__,
+    }
+
+    # Extract ticker information from state if available
+    if state and "data" in state and "tickers" in state["data"]:
+        tickers = state["data"]["tickers"]
+        if tickers:
+            trace_metadata["tickers"] = ",".join(tickers) if isinstance(tickers, list) else str(tickers)
+
+    # Add tags for categorization
+    trace_tags = ["llm_call"]
+    if agent_name:
+        # Extract analyst type from agent_name (e.g., "warren_buffett_agent" -> "warren_buffett")
+        analyst_key = agent_name.replace("_agent", "")
+        trace_tags.append("analyst")
+        trace_tags.append(analyst_key)
+
+    # Call the LLM with retries and LangSmith tracing
     for attempt in range(max_retries):
         try:
-            # Call the LLM
-            result = llm.invoke(prompt)
+            # Wrap LLM call in LangSmith tracing context
+            with langsmith_tracing_context(
+                agent_name=agent_name,
+                metadata=trace_metadata,
+                tags=trace_tags
+            ):
+                # Call the LLM
+                result = llm.invoke(prompt)
 
-            # For non-JSON support models, we need to extract and parse the JSON manually
-            if model_info and not model_info.has_json_mode():
-                parsed_result = extract_json_from_response(result.content)
-                if parsed_result:
-                    return pydantic_model(**parsed_result)
-            else:
-                return result
+                # For non-JSON support models, we need to extract and parse the JSON manually
+                if model_info and not model_info.has_json_mode():
+                    parsed_result = extract_json_from_response(result.content)
+                    if parsed_result:
+                        return pydantic_model(**parsed_result)
+                else:
+                    return result
 
         except Exception as e:
             if agent_name:
