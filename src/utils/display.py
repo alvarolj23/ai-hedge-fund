@@ -162,6 +162,7 @@ def print_trading_output(result: dict) -> None:
             portfolio_manager_reasoning = decision.get("reasoning")
             break
             
+    analyst_signals = result.get("analyst_signals", {})
     for ticker, decision in decisions.items():
         action = decision.get("action", "").upper()
         action_color = {
@@ -171,16 +172,43 @@ def print_trading_output(result: dict) -> None:
             "COVER": Fore.GREEN,
             "SHORT": Fore.RED,
         }.get(action, Fore.WHITE)
+
+        # Calculate analyst signal counts
+        bullish_count = 0
+        bearish_count = 0
+        neutral_count = 0
+        if analyst_signals:
+            for agent, signals in analyst_signals.items():
+                if ticker in signals:
+                    signal = signals[ticker].get("signal", "").upper()
+                    if signal == "BULLISH":
+                        bullish_count += 1
+                    elif signal == "BEARISH":
+                        bearish_count += 1
+                    elif signal == "NEUTRAL":
+                        neutral_count += 1
+
         portfolio_data.append(
             [
                 f"{Fore.CYAN}{ticker}{Style.RESET_ALL}",
                 f"{action_color}{action}{Style.RESET_ALL}",
                 f"{action_color}{decision.get('quantity')}{Style.RESET_ALL}",
                 f"{Fore.WHITE}{decision.get('confidence'):.1f}%{Style.RESET_ALL}",
+                f"{Fore.GREEN}{bullish_count}{Style.RESET_ALL}",
+                f"{Fore.RED}{bearish_count}{Style.RESET_ALL}",
+                f"{Fore.YELLOW}{neutral_count}{Style.RESET_ALL}",
             ]
         )
 
-    headers = [f"{Fore.WHITE}Ticker", "Action", "Quantity", "Confidence"]
+    headers = [
+        f"{Fore.WHITE}Ticker",
+        f"{Fore.WHITE}Action",
+        f"{Fore.WHITE}Quantity",
+        f"{Fore.WHITE}Confidence",
+        f"{Fore.WHITE}Bullish",
+        f"{Fore.WHITE}Bearish",
+        f"{Fore.WHITE}Neutral",
+    ]
     
     # Print the portfolio summary table
     print(
@@ -188,7 +216,7 @@ def print_trading_output(result: dict) -> None:
             portfolio_data,
             headers=headers,
             tablefmt="grid",
-            colalign=("left", "center", "right", "right"),
+            colalign=("left", "center", "right", "right", "center", "center", "center"),
         )
     )
     

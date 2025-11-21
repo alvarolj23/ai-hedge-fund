@@ -17,6 +17,8 @@ from src.agents.valuation import valuation_analyst_agent
 from src.agents.warren_buffett import warren_buffett_agent
 from src.agents.rakesh_jhunjhunwala import rakesh_jhunjhunwala_agent
 from src.agents.mohnish_pabrai import mohnish_pabrai_agent
+from src.agents.news_sentiment import news_sentiment_agent
+from src.agents.growth_agent import growth_analyst_agent
 
 # Define analyst configuration - single source of truth
 ANALYST_CONFIG = {
@@ -132,13 +134,29 @@ ANALYST_CONFIG = {
         "type": "analyst",
         "order": 12,
     },
+    "growth_analyst": {
+        "display_name": "Growth Analyst",
+        "description": "Growth Specialist",
+        "investing_style": "Analyzes growth trends and valuation to identify growth opportunities through growth analysis.",
+        "agent_func": growth_analyst_agent,
+        "type": "analyst",
+        "order": 13,
+    },
+    "news_sentiment_analyst": {
+        "display_name": "News Sentiment Analyst",
+        "description": "News Sentiment Specialist",
+        "investing_style": "Analyzes news sentiment to predict market movements and identify opportunities through news analysis.",
+        "agent_func": news_sentiment_agent,
+        "type": "analyst",
+        "order": 14,
+    },
     "sentiment_analyst": {
         "display_name": "Sentiment Analyst",
         "description": "Market Sentiment Specialist",
         "investing_style": "Gauges market sentiment and investor behavior to predict market movements and identify opportunities through behavioral analysis.",
         "agent_func": sentiment_analyst_agent,
         "type": "analyst",
-        "order": 13,
+        "order": 15,
     },
     "valuation_analyst": {
         "display_name": "Valuation Analyst",
@@ -146,7 +164,7 @@ ANALYST_CONFIG = {
         "investing_style": "Specializes in determining the fair value of companies, using various valuation models and financial metrics for investment decisions.",
         "agent_func": valuation_analyst_agent,
         "type": "analyst",
-        "order": 14,
+        "order": 16,
     },
 }
 

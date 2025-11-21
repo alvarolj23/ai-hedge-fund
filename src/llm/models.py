@@ -117,6 +117,12 @@ def get_model_info(model_name: str, model_provider: str) -> LLMModel | None:
     return next((model for model in all_models if model.model_name == model_name and model.provider == model_provider), None)
 
 
+def find_model_by_name(model_name: str) -> LLMModel | None:
+    """Find a model by its name across all available models."""
+    all_models = AVAILABLE_MODELS + OLLAMA_MODELS
+    return next((model for model in all_models if model.model_name == model_name), None)
+
+
 def get_models_list():
     """Get the list of models for API responses."""
     return [

@@ -6,7 +6,7 @@ import questionary
 from colorama import Fore, Style
 
 from src.utils.analysts import ANALYST_ORDER
-from src.llm.models import LLM_ORDER, OLLAMA_LLM_ORDER, get_model_info, ModelProvider
+from src.llm.models import LLM_ORDER, OLLAMA_LLM_ORDER, get_model_info, ModelProvider, find_model_by_name
 from src.utils.ollama import ensure_ollama_and_model
 
 from dataclasses import dataclass
@@ -40,6 +40,7 @@ def add_common_args(
         )
     if include_ollama:
         parser.add_argument("--ollama", action="store_true", help="Use Ollama for local LLM inference")
+    parser.add_argument("--model", type=str, required=False, help="Model name to use (e.g., gpt-4o)")
     return parser
 
 
@@ -101,9 +102,19 @@ def select_analysts(flags: dict | None = None) -> list[str]:
     return choices
 
 
-def select_model(use_ollama: bool) -> tuple[str, str]:
+def select_model(use_ollama: bool, model_flag: str | None = None) -> tuple[str, str]:
     model_name: str = ""
     model_provider: str | None = None
+
+    if model_flag:
+        model = find_model_by_name(model_flag)
+        if model:
+            print(
+                f"\nUsing specified model: {Fore.CYAN}{model.provider.value}{Style.RESET_ALL} - {Fore.GREEN + Style.BRIGHT}{model.model_name}{Style.RESET_ALL}\n"
+            )
+            return model.model_name, model.provider.value
+        else:
+            print(f"{Fore.RED}Model '{model_flag}' not found. Please select a model.{Style.RESET_ALL}")
 
     if use_ollama:
         print(f"{Fore.CYAN}Using Ollama for local LLM inference.{Style.RESET_ALL}")
@@ -257,7 +268,7 @@ def parse_cli_inputs(
         "analysts_all": getattr(args, "analysts_all", False),
         "analysts": getattr(args, "analysts", None),
     })
-    model_name, model_provider = select_model(getattr(args, "ollama", False))
+    model_name, model_provider = select_model(getattr(args, "ollama", False), getattr(args, "model", None))
     start_date, end_date = resolve_dates(getattr(args, "start_date", None), getattr(args, "end_date", None), default_months_back=default_months_back)
 
     return CLIInputs(
