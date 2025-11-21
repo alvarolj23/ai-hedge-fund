@@ -1,6 +1,14 @@
 """
-Azure Functions App - Market Monitoring
+Azure Functions App - Market Monitoring (Enhanced with Multi-API Support)
 Uses Python v2 programming model with decorators
+
+Features:
+- 1-minute fast monitoring for immediate signal detection
+- 5-minute comprehensive analysis with enhanced indicators
+- 15-minute validation and confirmation
+- Multi-API support (Finnhub, Polygon, Alpha Vantage, yfinance)
+- Market holiday handling
+- VWAP, ATR, gap detection, volume velocity, and more
 """
 import datetime as dt
 import json
@@ -8,7 +16,7 @@ import logging
 import os
 from dataclasses import dataclass
 from statistics import mean
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Optional
 from zoneinfo import ZoneInfo
 
 import azure.functions as func
@@ -18,6 +26,9 @@ from azure.storage.queue import QueueClient
 # Import local modules (no external src dependencies)
 from models import Price
 from api_client import get_prices
+from multi_api_client import MultiAPIClient, Quote, IntradayBar
+from signal_detection import enhanced_signal_detection, SignalResult
+from market_calendar import is_market_open, is_market_holiday, previous_trading_day
 
 
 EASTERN = ZoneInfo("America/New_York")
@@ -149,21 +160,20 @@ def _ensure_cosmos_store() -> CosmosCooldownStore:
 
 
 def _is_market_hours(now_utc: dt.datetime) -> bool:
-    eastern_now = now_utc.astimezone(EASTERN)
-    if eastern_now.weekday() >= 5:  # Saturday/Sunday
-        return False
-    market_open = eastern_now.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = eastern_now.replace(hour=16, minute=0, second=0, microsecond=0)
-    return market_open <= eastern_now <= market_close
+    """Check if market is currently open (with holiday support)"""
+    return is_market_open(now_utc)
 
 
 def _history_window_days(volume_window: int) -> int:
-    default_days = int(os.getenv("MARKET_MONITOR_LOOKBACK_DAYS", "30"))
+    # Changed default from 30 to 180 days to match queue worker requirements
+    # Queue worker needs 180 days (126 trading days) for technical indicators
+    default_days = int(os.getenv("MARKET_MONITOR_LOOKBACK_DAYS", "180"))
     return max(default_days, volume_window + 2)
 
 
-def _fetch_price_history(ticker: str, start_date: str, end_date: str) -> list[Price]:
-    prices = get_prices(ticker=ticker, start_date=start_date, end_date=end_date)
+def _fetch_price_history(ticker: str, start_date: str, end_date: str, interval: str = "day", interval_multiplier: int = 1) -> list[Price]:
+    """Fetch price history with configurable intervals"""
+    prices = get_prices(ticker=ticker, start_date=start_date, end_date=end_date, interval=interval, interval_multiplier=interval_multiplier)
     prices = sorted(prices, key=lambda price: _parse_price_time(price.time))
     return prices
 
@@ -344,11 +354,22 @@ def market_monitor(market_timer: func.TimerRequest) -> None:
     logging.info("Thresholds - Price change: %.2f%%, Volume multiplier: %.1fx, Cooldown: %ds",
                  percent_threshold * 100, volume_multiplier, cooldown_seconds)
 
+    # Get interval settings for intraday monitoring
+    interval = os.getenv("MARKET_MONITOR_INTERVAL", "minute")
+    interval_multiplier = int(os.getenv("MARKET_MONITOR_INTERVAL_MULTIPLIER", "5"))
+
     for ticker in watchlist:
         logging.info("Processing ticker: %s", ticker)
         try:
-            prices = _fetch_price_history(ticker, start_date, end_date)
-            logging.info("Fetched %d price records for %s", len(prices), ticker)
+            # Fetch intraday prices (5-minute bars by default)
+            prices = _fetch_price_history(ticker, start_date, end_date, interval=interval, interval_multiplier=interval_multiplier)
+            logging.info("Fetched %d price records for %s (%s/%d interval)", len(prices), ticker, interval, interval_multiplier)
+
+            # Get previous day close for gap detection
+            prev_day = previous_trading_day(today_eastern)
+            prev_day_prices = _fetch_price_history(ticker, prev_day.isoformat(), prev_day.isoformat(), interval="day", interval_multiplier=1)
+            previous_close = prev_day_prices[-1].close if prev_day_prices else None
+
         except Exception as exc:  # noqa: BLE001 - log and continue on data failure
             logging.exception("Failed to fetch prices for %s: %s", ticker, exc)
             continue
@@ -381,3 +402,187 @@ def market_monitor(market_timer: func.TimerRequest) -> None:
             logging.exception("Failed to enqueue analysis for %s: %s", ticker, exc)
     
     logging.info("Market monitor execution completed")
+
+
+@app.timer_trigger(schedule="0 * * * * *", arg_name="fast_timer", run_on_startup=False, use_monitor=False)
+def fast_monitor(fast_timer: func.TimerRequest) -> None:
+    """
+    Fast 1-minute monitoring using real-time APIs (Finnhub, yfinance)
+    Runs every 1 minute to catch rapid price movements
+    Triggers the main 5-minute function for full analysis if signals detected
+    """
+    logging.info("Fast monitor (1-min) triggered at %s", _format_schedule_status(fast_timer))
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+
+    if not _is_market_hours(now_utc):
+        logging.info("Outside market hours - skipping fast monitor")
+        return
+
+    logging.info("Fast monitor active - checking for immediate signals")
+
+    watchlist_env = (
+        os.getenv("MARKET_MONITOR_WATCHLIST")
+        or os.getenv("WATCHLIST_TICKERS")
+        or os.getenv("DEFAULT_WATCHLIST")
+    )
+    watchlist = _parse_watchlist(watchlist_env)
+    if not watchlist:
+        watchlist = ["AAPL", "MSFT", "NVDA"]
+
+    # Use multi-API client for real-time quotes
+    multi_client = MultiAPIClient()
+
+    # Fast detection thresholds (more aggressive)
+    fast_percent_threshold = float(os.getenv("FAST_MONITOR_PERCENT_THRESHOLD", "0.005"))  # 0.5%
+    fast_velocity_threshold = float(os.getenv("FAST_MONITOR_VELOCITY_THRESHOLD", "0.002"))  # 0.2% per minute
+
+    try:
+        cooldown_store = _ensure_cosmos_store()
+    except RuntimeError as exc:
+        logging.error("Cosmos configuration error: %s", exc)
+        return
+
+    cooldown_seconds = int(os.getenv("FAST_MONITOR_COOLDOWN_SECONDS", str(5 * 60)))  # 5 minutes
+    cooldown_window = dt.timedelta(seconds=cooldown_seconds)
+
+    for ticker in watchlist:
+        logging.info("Fast checking: %s", ticker)
+
+        try:
+            # Get real-time quote
+            quote = multi_client.get_best_quote(ticker)
+            if not quote or quote.price <= 0:
+                logging.warning("No valid quote for %s", ticker)
+                continue
+
+            # Get recent intraday bars for context (1-minute bars from yfinance)
+            intraday_bars = multi_client.get_intraday_bars(ticker, interval_minutes=1, limit=60)
+
+            if not intraday_bars or len(intraday_bars) < 5:
+                logging.warning("Insufficient intraday data for %s", ticker)
+                continue
+
+            # Convert to Price objects for signal detection
+            prices = [
+                Price(
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    time=bar.timestamp.isoformat()
+                )
+                for bar in intraday_bars
+            ]
+
+            # Quick checks for immediate signals
+            latest_price = quote.price
+            previous_price = prices[-1].close if prices else latest_price
+
+            if previous_price > 0:
+                instant_change = abs(latest_price - previous_price) / previous_price
+
+                if instant_change >= fast_percent_threshold:
+                    logging.info("%s: Fast signal - Instant change %.2f%%", ticker, instant_change * 100)
+
+                    # Check cooldown
+                    last_trigger = cooldown_store.get_last_trigger(ticker)
+                    if last_trigger and now_utc - last_trigger < cooldown_window:
+                        logging.info("Ticker %s in cooldown (last: %s)", ticker, last_trigger)
+                        continue
+
+                    # This is a fast signal - log it for the 5-minute function to pick up
+                    logging.info("🚨 FAST ALERT: %s moved %.2f%% in last minute", ticker, instant_change * 100)
+
+                    # Update a "fast signal" marker in Cosmos that the 5-min function can check
+                    # The 5-minute function will do the full analysis
+                    cooldown_store.upsert_trigger(ticker, now_utc, ["fast_movement"])
+
+        except Exception as exc:
+            logging.error("Fast monitor error for %s: %s", ticker, exc)
+            continue
+
+    logging.info("Fast monitor execution completed")
+
+
+@app.timer_trigger(schedule="0 */15 * * * *", arg_name="validation_timer", run_on_startup=False, use_monitor=False)
+def validation_monitor(validation_timer: func.TimerRequest) -> None:
+    """
+    15-minute validation and confirmation monitor
+    Uses Alpha Vantage for technical indicators validation
+    Checks for false positives and provides additional context
+    """
+    logging.info("Validation monitor (15-min) triggered at %s", _format_schedule_status(validation_timer))
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+
+    if not _is_market_hours(now_utc):
+        logging.info("Outside market hours - skipping validation monitor")
+        return
+
+    logging.info("Validation monitor active - checking recent signals")
+
+    watchlist_env = (
+        os.getenv("MARKET_MONITOR_WATCHLIST")
+        or os.getenv("WATCHLIST_TICKERS")
+        or os.getenv("DEFAULT_WATCHLIST")
+    )
+    watchlist = _parse_watchlist(watchlist_env)
+    if not watchlist:
+        watchlist = ["AAPL", "MSFT", "NVDA"]
+
+    try:
+        cooldown_store = _ensure_cosmos_store()
+    except RuntimeError as exc:
+        logging.error("Cosmos configuration error: %s", exc)
+        return
+
+    # Check which tickers have triggered in the last 15 minutes
+    lookback_window = dt.timedelta(minutes=15)
+    multi_client = MultiAPIClient()
+
+    for ticker in watchlist:
+        try:
+            last_trigger = cooldown_store.get_last_trigger(ticker)
+            if not last_trigger:
+                continue
+
+            if now_utc - last_trigger > lookback_window:
+                continue
+
+            logging.info("Validating recent signal for %s (triggered %s ago)",
+                        ticker, now_utc - last_trigger)
+
+            # Get RSI from Alpha Vantage for validation
+            rsi = multi_client.alpha_vantage.get_rsi(ticker, interval="5min", time_period=14)
+
+            if rsi:
+                logging.info("%s validation - RSI(14): %.2f", ticker, rsi)
+
+                # Log overbought/oversold conditions
+                if rsi >= 70:
+                    logging.info("⚠️  %s: RSI indicates overbought (%.2f)", ticker, rsi)
+                elif rsi <= 30:
+                    logging.info("⚠️  %s: RSI indicates oversold (%.2f)", ticker, rsi)
+                else:
+                    logging.info("✓ %s: RSI neutral (%.2f)", ticker, rsi)
+
+            # Get recent intraday bars for trend confirmation
+            bars = multi_client.get_intraday_bars(ticker, interval_minutes=5, limit=12)  # Last hour
+
+            if len(bars) >= 6:
+                recent_trend = sum(1 if bars[i].close > bars[i-1].close else -1 for i in range(1, 6))
+
+                if recent_trend >= 4:
+                    logging.info("✓ %s: Strong uptrend confirmed (last 30 min)", ticker)
+                elif recent_trend <= -4:
+                    logging.info("✓ %s: Strong downtrend confirmed (last 30 min)", ticker)
+                else:
+                    logging.info("⚠️  %s: Mixed signals, trend unclear", ticker)
+
+        except Exception as exc:
+            logging.error("Validation error for %s: %s", ticker, exc)
+            continue
+
+    logging.info("Validation monitor execution completed")

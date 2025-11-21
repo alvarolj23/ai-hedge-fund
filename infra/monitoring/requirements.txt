@@ -1,6 +1,20 @@
+# Azure Functions Core
 azure-functions
 azure-storage-queue>=12.7.0
 azure-cosmos>=4.5.0
+
+# HTTP and data handling
 requests>=2.31.0
 pandas>=2.1.0
 pydantic>=2.4.0
+
+# Multi-API support for real-time data
+yfinance>=0.2.32  # Free, no API key required - for real-time quotes and intraday bars
+
+# Optional: Uncomment if using specific APIs (all have free tiers)
+# finnhub-python>=2.4.0  # Alternative to direct requests
+# polygon-api-client>=1.12.0  # Alternative to direct requests
+# alpha-vantage>=2.3.1  # Alternative to direct requests
+
+# Note: Current implementation uses requests directly for all APIs
+# to minimize dependencies. The packages above are alternatives if preferred.

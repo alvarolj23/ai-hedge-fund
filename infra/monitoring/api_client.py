@@ -41,16 +41,18 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
         return response
 
 
-def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None) -> list[Price]:
+def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None, interval: str = "day", interval_multiplier: int = 1) -> list[Price]:
     """
     Fetch price data from API.
-    
+
     Args:
         ticker: Stock ticker symbol
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
         api_key: Optional API key (uses env var if not provided)
-    
+        interval: Price interval (minute, hour, day, week, month) - defaults to day
+        interval_multiplier: Multiplier for interval (e.g., 5 for 5-minute bars) - defaults to 1
+
     Returns:
         List of Price objects
     """
@@ -59,9 +61,9 @@ def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None)
     if financial_api_key:
         headers["X-API-KEY"] = financial_api_key
 
-    url = f"https://api.financialdatasets.ai/prices/?ticker={ticker}&interval=day&interval_multiplier=1&start_date={start_date}&end_date={end_date}"
+    url = f"https://api.financialdatasets.ai/prices/?ticker={ticker}&interval={interval}&interval_multiplier={interval_multiplier}&start_date={start_date}&end_date={end_date}"
     response = _make_api_request(url, headers)
-    
+
     if response.status_code != 200:
         raise Exception(f"Error fetching data: {ticker} - {response.status_code} - {response.text}")
 

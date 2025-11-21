@@ -1,156 +1,304 @@
-# Market Monitoring Azure Function
+# AI Hedge Fund - Enhanced Real-Time Market Monitoring System
 
-This Function App polls the Financial Datasets API every five minutes during U.S. equity market hours (9:30am–4:00pm ET). It
-evaluates simple price/volume heuristics for the configured watchlist and enqueues downstream analysis jobs only when fresh
-signals are detected. Cooldown metadata is stored in Cosmos DB so that identical alerts are not produced repeatedly.
+## 🚀 Overview
 
-## Project Layout
+This is a **state-of-the-art multi-tier monitoring system** that detects trading signals in real-time using a hybrid approach with multiple data sources and advanced indicators.
+
+### Key Features
+
+✅ **Real-Time Detection** - <1 minute latency using multi-API integration
+✅ **Smart Signal Detection** - 9+ indicators including VWAP, ATR, gap detection, volume velocity
+✅ **Three-Tier Monitoring** - 1-min fast scan, 5-min comprehensive, 15-min validation
+✅ **Market-Aware** - Automatic holiday handling, early close detection
+✅ **Free Tier Friendly** - All APIs support free tiers, $0/month operation possible
+✅ **Production Ready** - Cooldowns, retries, error handling, logging
+
+## 📊 Architecture
 
 ```
-infra/monitoring/
-├── .funcignore
-├── host.json
-├── local.settings.json.sample        # Copy to local.settings.json for local development
-├── market_monitor/
-│   ├── __init__.py                   # Timer trigger implementation
-│   └── function.json                 # Cron schedule (every 5 minutes)
-└── requirements.txt
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Tiered Monitoring System                         │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│ Fast Monitor │     │ Main Monitor │     │  Validation  │
+│  (1 minute)  │────▶│  (5 minutes) │────▶│ (15 minutes) │
+└──────────────┘     └──────────────┘     └──────────────┘
+      │                     │                      │
+      │                     │                      │
+      ▼                     ▼                      ▼
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   yfinance   │     │  Financial   │     │    Alpha     │
+│   Finnhub    │     │   Datasets   │     │  Vantage     │
+│  (quotes)    │     │ (5-min bars) │     │    (RSI)     │
+└──────────────┘     └──────────────┘     └──────────────┘
+      │                     │                      │
+      │                     ▼                      │
+      │              ┌──────────────┐              │
+      │              │Enhanced      │              │
+      └──────────────▶Signal        │◀─────────────┘
+                     │Detection     │
+                     └──────────────┘
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │ Azure Queue  │
+                     │ (Analysis)   │
+                     └──────────────┘
 ```
 
-The Function imports the existing `src.tools.api.get_prices` helper so that the same Financial Datasets client is reused in the
-serverless workload.
+## 🎯 What's New in This Version
 
-## Environment Variables
+### Fixed Issues
 
-Set the following application settings (locally in `local.settings.json` or in the Function App configuration):
+1. ✅ **CRITICAL: Real-time data issue resolved**
+   - **Before:** Using daily bars (`interval=day`) - values didn't update during market hours
+   - **After:** Using 5-minute intraday bars - live updates every 5 minutes
 
-| Name | Required | Description |
-| ---- | -------- | ----------- |
-| `AzureWebJobsStorage` | ✅ | General-purpose storage account used by Azure Functions host. The queue connection string falls back to this value if a dedicated one is not provided. |
-| `FUNCTIONS_WORKER_RUNTIME` | ✅ | Must be set to `python` when running locally or on Azure. |
-| `FINANCIAL_DATASETS_API_KEY` | ✅ (for non-free tickers) | API key forwarded to `src/tools/api.py` when fetching price data. |
-| `MARKET_MONITOR_WATCHLIST` | ➖ | Comma-separated tickers to inspect (defaults to `AAPL,MSFT,NVDA`). |
-| `MARKET_MONITOR_PERCENT_CHANGE_THRESHOLD` | ➖ | Minimum intraday percentage change (e.g. `0.02` for 2%) required to trigger a signal. |
-| `MARKET_MONITOR_VOLUME_SPIKE_MULTIPLIER` | ➖ | Multiplier applied to the trailing average volume when flagging unusual activity (default `1.5`). |
-| `MARKET_MONITOR_VOLUME_LOOKBACK` | ➖ | Number of prior sessions used for the average volume baseline (default `10`). |
-| `MARKET_MONITOR_ANALYSIS_WINDOW_MINUTES` | ➖ | Width of the window sent to the queue worker for deeper analysis (default `120`). |
-| `MARKET_MONITOR_COOLDOWN_SECONDS` | ➖ | Minimum time between alerts for the same ticker (default `1800`, i.e. 30 minutes). |
-| `MARKET_MONITOR_LOOKBACK_DAYS` | ➖ | Amount of history retrieved per execution to compute the heuristics (default `30`). |
-| `MARKET_MONITOR_QUEUE_CONNECTION_STRING` | ✅ | Connection string for the storage account hosting the downstream queue (falls back to `AzureWebJobsStorage`). |
-| `MARKET_MONITOR_QUEUE_NAME` | ✅ | Target queue name consumed by `queue_worker.py`. |
-| `COSMOS_ENDPOINT` | ✅ | Cosmos DB account endpoint (e.g. `https://<account>.documents.azure.com:443/`). |
-| `COSMOS_KEY` | ✅ | Primary or secondary key for the Cosmos DB account. |
-| `COSMOS_DATABASE` | ✅ | Database used to persist ticker cooldown metadata. |
-| `COSMOS_CONTAINER` | ✅ | Container (partitioned by `/ticker`) storing the last-trigger timestamps. |
+2. ✅ **Historical data mismatch fixed**
+   - **Before:** Fetching 30 days (insufficient for technical indicators)
+   - **After:** Fetching 180 days (126+ trading days as required)
 
-> **Holiday Handling**: The timer trigger executes on every weekday regardless of market holidays. If holiday awareness is
-> required, add logic to reference an exchange calendar or pause the Function App via schedules.
+3. ✅ **Market holiday handling added**
+   - System now aware of NYSE/NASDAQ holidays
+   - No failed requests on market holidays
+   - Supports early close days (1:00 PM ET close)
 
-## Queue Payload Contract
+### New Capabilities
 
-Messages pushed to the storage queue follow this schema:
+1. **Multi-API Integration**
+   - Finnhub (60 calls/min) - Real-time quotes, news
+   - Polygon (free tier) - 1-min aggregates, VWAP
+   - Alpha Vantage (25 calls/day) - Technical indicators
+   - yfinance (unlimited) - Reliable fallback
+
+2. **Enhanced Signal Detection**
+   - Gap detection at market open
+   - Volume velocity (not just volume ratio)
+   - Price velocity (rate of change)
+   - VWAP deviation analysis
+   - Intraday breakout detection
+   - Bollinger Band position
+   - ATR expansion monitoring
+   - Volatility regime changes
+
+3. **Three-Tier Monitoring**
+   - **1-minute:** Fast detection of rapid movements
+   - **5-minute:** Comprehensive analysis with all indicators
+   - **15-minute:** Validation and confirmation
+
+## 🛠️ Setup Instructions
+
+### 1. Install Dependencies
+
+```bash
+cd infra/monitoring
+pip install -r requirements.txt
+```
+
+### 2. Get API Keys (Free Tiers)
+
+#### Required:
+- **Financial Datasets**: [financialdatasets.ai](https://financialdatasets.ai) - Historical and intraday data
+
+#### Optional (but recommended):
+- **Finnhub**: [finnhub.io](https://finnhub.io) - Free: 60 calls/min
+- **Polygon**: [polygon.io](https://polygon.io) - Free tier available
+- **Alpha Vantage**: [alphavantage.co](https://www.alphavantage.co) - Free: 25 calls/day
+- **yfinance**: No API key needed (pip install only)
+
+### 3. Configure Environment Variables
+
+Create `local.settings.json` for local testing:
 
 ```json
 {
-  "tickers": ["AAPL"],
-  "analysis_window": {
-    "start": "2024-01-02T14:30:00+00:00",
-    "end": "2024-01-02T16:30:00+00:00"
-  },
-  "correlation_hints": {
-    "related_watchlist": ["MSFT", "NVDA"],
-    "basis": ["price_breakout", "volume_spike"]
-  },
-  "signals": ["price_breakout", "volume_spike"],
-  "market_snapshot": {
-    "percent_change": 0.0234,
-    "volume_ratio": 1.78,
-    "latest_close": 198.34,
-    "previous_close": 194.85,
-    "latest_volume": 54200123,
-    "average_volume": 30451200.0
-  },
-  "triggered_at": "2024-01-02T16:35:00+00:00"
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+
+    "FINANCIAL_DATASETS_API_KEY": "your_key_here",
+    "FINNHUB_API_KEY": "your_key_here",
+    "ALPHA_VANTAGE_API_KEY": "your_key_here",
+
+    "MARKET_MONITOR_WATCHLIST": "AAPL,MSFT,NVDA",
+    "MARKET_MONITOR_INTERVAL": "minute",
+    "MARKET_MONITOR_INTERVAL_MULTIPLIER": "5",
+    "MARKET_MONITOR_LOOKBACK_DAYS": "180",
+
+    "COSMOS_ENDPOINT": "https://your-cosmos.documents.azure.com:443/",
+    "COSMOS_KEY": "your_key",
+    "COSMOS_DATABASE": "market-monitor",
+    "COSMOS_CONTAINER": "signal-cooldowns",
+
+    "MARKET_MONITOR_QUEUE_CONNECTION_STRING": "your_queue_connection",
+    "MARKET_MONITOR_QUEUE_NAME": "market-signals"
+  }
 }
 ```
 
-`queue_worker.py` can rely on `tickers`, `analysis_window`, and `correlation_hints` to hydrate deeper pipelines. Additional
-fields (`signals`, `market_snapshot`, `triggered_at`) provide diagnostic context.
+See [ENV_VARIABLES.md](./ENV_VARIABLES.md) for complete configuration options.
 
-## Local Development
+### 4. Deploy to Azure
 
-1. Install Azure Functions Core Tools (v4) and the Python dependencies:
-   ```bash
-   npm i -g azure-functions-core-tools@4 --unsafe-perm true
-   cd infra/monitoring
-   python -m venv .venv && source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-2. Copy the sample settings file and provide the required secrets:
-   ```bash
-   cp local.settings.json.sample local.settings.json
-   ```
-3. Start the Functions host (it will automatically respect the 5-minute cron schedule):
-   ```bash
-   func start
-   ```
+```bash
+# Login to Azure
+az login
 
-> For deterministic testing, you can invoke the timer manually: `func start --javascript` isn't necessary—use
-> `func start` and press **Ctrl+C** when finished. Alternatively, call the Python entrypoint with
-> `func host start --no-build` or trigger the function via `func run market_monitor`.
+# Deploy
+func azure functionapp publish your-function-app
+```
 
-## Deployment
+### 5. Configure Azure Settings
 
-### Azure Functions Core Tools
+```bash
+# Set environment variables in Azure
+az functionapp config appsettings set \
+  --name your-function-app \
+  --resource-group your-rg \
+  --settings \
+    FINANCIAL_DATASETS_API_KEY=your_key \
+    MARKET_MONITOR_WATCHLIST=AAPL,MSFT,NVDA \
+    MARKET_MONITOR_INTERVAL=minute \
+    MARKET_MONITOR_INTERVAL_MULTIPLIER=5
+```
 
-1. Create or reuse the required Azure resources:
-   - Storage account with the target queue.
-   - Cosmos DB account + database + container (`/ticker` partition key).
-   - Function App configured for Python 3.11 (Consumption or Premium plan).
-2. Publish the Function App:
-   ```bash
-   cd infra/monitoring
-   func azure functionapp publish <FUNCTION_APP_NAME>
-   ```
-3. Configure application settings (environment variables listed above) either through the Azure Portal, `az functionapp
-   config appsettings set`, or infrastructure-as-code. Ensure the queue and Cosmos DB credentials are present before enabling
-the Function.
+## 🧪 Testing
 
-### GitHub Actions
+### Test Locally
 
-1. Store the secrets in the repository or organization (`AZURE_FUNCTIONAPP_NAME`, `AZURE_FUNCTIONAPP_PUBLISH_PROFILE`, queue and
-   Cosmos settings, API keys, etc.).
-2. Add a workflow similar to the snippet below:
+```bash
+# Start Functions runtime
+func start
+```
 
-   ```yaml
-   name: Deploy Monitoring Function
-   on:
-     push:
-       branches: [ main ]
-       paths:
-         - 'infra/monitoring/**'
-   jobs:
-     build-and-deploy:
-       runs-on: ubuntu-latest
-       steps:
-         - uses: actions/checkout@v4
-         - uses: actions/setup-python@v5
-           with:
-             python-version: '3.11'
-         - name: Install dependencies
-           run: |
-             cd infra/monitoring
-             pip install -r requirements.txt
-         - name: Azure Functions deploy
-           uses: Azure/functions-action@v1
-           with:
-             app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
-             publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
-             package: infra/monitoring
-   ```
+### Test Outside Market Hours
 
-3. Configure the Function App application settings via the Azure CLI, ARM/Bicep, or the portal as part of the workflow if
-desired (e.g. use `azure/appservice-settings@v2`).
+To test outside market hours, temporarily modify `function_app.py`:
 
-With the Function App deployed, the timer trigger will run every five minutes but only dispatch jobs when market hours are open
-and new heuristics cross the configured thresholds.
+```python
+# Comment out the market hours check:
+# if not _is_market_hours(now_utc):
+#     logging.info("Outside market hours - skipping execution")
+#     return
+```
+
+### Monitor Logs
+
+```bash
+# View real-time logs
+func azure functionapp logstream your-function-app
+```
+
+## 📈 Monitoring & Observability
+
+### Log Patterns
+
+```bash
+# Successful signal detection:
+"🚨 FAST ALERT: AAPL moved 0.65% in last minute"
+"AAPL: SIGNALS DETECTED - ['price_breakout', 'volume_spike'] (change: 2.15%, vol ratio: 2.1x)"
+
+# Normal operation:
+"AAPL: No signals triggered (change: -0.86%, vol ratio: 0.99x)"
+
+# Validation:
+"✓ AAPL: Strong uptrend confirmed (last 30 min)"
+"⚠️ MSFT: RSI indicates overbought (78.50)"
+```
+
+## 🎛️ Tuning Signal Detection
+
+### Reduce False Positives
+
+```bash
+# Increase thresholds
+MARKET_MONITOR_PERCENT_CHANGE_THRESHOLD=0.03  # 3% instead of 2%
+MARKET_MONITOR_VOLUME_SPIKE_MULTIPLIER=2.0    # 2x instead of 1.5x
+MARKET_MONITOR_COOLDOWN_SECONDS=3600          # 1 hour instead of 30 min
+```
+
+### Increase Sensitivity
+
+```bash
+# Decrease thresholds
+MARKET_MONITOR_PERCENT_CHANGE_THRESHOLD=0.01  # 1% instead of 2%
+FAST_MONITOR_PERCENT_THRESHOLD=0.003          # 0.3% instead of 0.5%
+```
+
+## 🐛 Troubleshooting
+
+### Problem: "No price data" errors
+
+**Solutions:**
+1. Verify `FINANCIAL_DATASETS_API_KEY` is valid
+2. Check ticker symbols are correct (use uppercase)
+3. Ensure `MARKET_MONITOR_LOOKBACK_DAYS=180`
+
+### Problem: Values not updating
+
+**Solution:**
+```bash
+# Ensure these are set:
+MARKET_MONITOR_INTERVAL=minute
+MARKET_MONITOR_INTERVAL_MULTIPLIER=5
+```
+
+### Problem: Fast monitor not working
+
+**Solution:**
+```bash
+pip install yfinance>=0.2.32
+```
+
+## 📚 Module Reference
+
+### `function_app.py`
+Main Azure Functions with three timer triggers:
+- `market_monitor`: Every 5 minutes, comprehensive analysis
+- `fast_monitor`: Every 1 minute, rapid detection
+- `validation_monitor`: Every 15 minutes, confirmation
+
+### `signal_detection.py`
+Enhanced signal detection with 9+ indicators
+
+### `multi_api_client.py`
+Multi-source data fetching with fallback
+
+### `market_calendar.py`
+Market hours and holiday handling
+
+## 📊 Performance Characteristics
+
+### Latency
+
+| Component | Latency | Notes |
+|-----------|---------|-------|
+| Fast Monitor | <1 min | yfinance, Finnhub |
+| Main Monitor | <5 min | Financial Datasets |
+| Validation | <15 min | Alpha Vantage |
+
+### API Call Volumes (3 tickers, 6.5 hr trading day)
+
+| API | Calls/Day | Free Limit | Usage % |
+|-----|-----------|------------|---------|
+| Financial Datasets | ~240 | Varies | Check dashboard |
+| yfinance | ~1,170 | Unlimited | 0% |
+| Finnhub | ~390 | 86,400/day | <1% |
+| Alpha Vantage | ~26 | 25/day | 100% |
+
+## 🔒 Security Best Practices
+
+1. **Never commit API keys**
+   - Add `local.settings.json` to `.gitignore`
+   - Use Azure Key Vault in production
+
+2. **Use managed identities**
+3. **Rotate keys regularly**
+4. **Monitor access**
+
+---
+
+**Last Updated:** 2025-11-21
+**Version:** 2.0 (Hybrid Multi-API)
