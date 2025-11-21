@@ -53,44 +53,44 @@ class DashboardService:
 
         try:
             # Import here to avoid circular dependencies
-            from src.brokers.portfolio_fetcher import fetch_alpaca_portfolio
+            from src.brokers.portfolio_fetcher import AlpacaPortfolioFetcher
 
             # Fetch portfolio from Alpaca
-            portfolio_data = fetch_alpaca_portfolio()
+            fetcher = AlpacaPortfolioFetcher(paper=True)
 
-            # Extract account info
-            account = portfolio_data.get("account", {})
-            positions = portfolio_data.get("positions", [])
+            # Get account info and positions for dashboard
+            account = fetcher._client.get_account()
+            positions = fetcher._client.get_all_positions()
 
             # Calculate totals
-            total_value = float(account.get("portfolio_value", 0))
-            cash = float(account.get("cash", 0))
-            buying_power = float(account.get("buying_power", 0))
+            total_value = float(account.portfolio_value)
+            cash = float(account.cash)
+            buying_power = float(account.buying_power)
 
             # Calculate positions value
             positions_value = sum(
-                float(pos.get("market_value", 0)) for pos in positions
+                abs(float(pos.market_value)) for pos in positions
             )
 
             # Format positions with P&L
             formatted_positions = []
             for pos in positions:
-                qty = float(pos.get("qty", 0))
-                current_price = float(pos.get("current_price", 0))
-                avg_entry = float(pos.get("avg_entry_price", 0))
-                market_value = float(pos.get("market_value", 0))
-                unrealized_pl = float(pos.get("unrealized_pl", 0))
-                unrealized_plpc = float(pos.get("unrealized_plpc", 0))
+                qty = float(pos.qty)
+                current_price = float(pos.current_price)
+                avg_entry = float(pos.avg_entry_price)
+                market_value = float(pos.market_value)
+                unrealized_pl = float(pos.unrealized_pl)
+                unrealized_plpc = float(pos.unrealized_plpc)
 
                 formatted_positions.append({
-                    "ticker": pos.get("symbol"),
+                    "ticker": pos.symbol,
                     "quantity": qty,
                     "avg_cost": avg_entry,
                     "current_price": current_price,
                     "market_value": market_value,
                     "unrealized_pl": unrealized_pl,
                     "unrealized_pl_percent": unrealized_plpc * 100,
-                    "side": pos.get("side", "long")
+                    "side": pos.side
                 })
 
             return {
