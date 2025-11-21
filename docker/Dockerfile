@@ -6,7 +6,7 @@ WORKDIR /app
 ENV PYTHONPATH=/app
 
 # Install Poetry
-RUN pip install poetry==1.7.1
+RUN pip install poetry==2.2.1
 
 # Copy only dependency files first for better caching
 COPY pyproject.toml poetry.lock* /app/
