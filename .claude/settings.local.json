@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__context7__get-library-docs",
+      "mcp__brave-search__brave_web_search",
+      "Bash(./venv/Scripts/python.exe:*)",
+      "Bash(conda env list:*)",
+      "Bash(python -c:*)",
+      "Bash(powershell -Command:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
