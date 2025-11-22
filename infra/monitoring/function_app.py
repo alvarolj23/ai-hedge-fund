@@ -14,10 +14,63 @@ import datetime as dt
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from statistics import mean
 from typing import Iterable, Sequence, Optional
 from zoneinfo import ZoneInfo
+
+# Configure logging EARLY
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# SSL / Certificate setup for corporate environments (must be done early)
+logger = logging.getLogger(__name__)
+
+try:
+    # Try Windows certificate store integration first
+    try:
+        import sys
+        # Add tests directory to path to import windows_cert_helpers
+        tests_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'tests')
+        if os.path.exists(tests_dir) and tests_dir not in sys.path:
+            sys.path.insert(0, tests_dir)
+        
+        from windows_cert_helpers import patch_ssl_with_windows_trust_store
+        patch_ssl_with_windows_trust_store()
+        logger.info("Windows certificate store integration enabled")
+    except ImportError:
+        logger.debug("windows_cert_helpers not available, skipping Windows cert store integration")
+    except Exception as e:
+        logger.debug(f"Windows cert store integration failed: {e}")
+    
+    # Create combined CA bundle if ssl_utils is available
+    try:
+        src_utils_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'src', 'utils')
+        if os.path.exists(src_utils_dir) and src_utils_dir not in sys.path:
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        
+        from src.utils.ssl_utils import create_combined_cabundle
+        
+        CORP_CA_BUNDLE = os.getenv(
+            "CORP_CA_BUNDLE",
+            r"C:\Users\ama5332\OneDrive - Toyota Motor Europe\Documents\certs\TME_certificates_chain.crt"
+        )
+        combined_bundle = create_combined_cabundle(CORP_CA_BUNDLE)
+        if combined_bundle:
+            logger.info(f"Combined CA bundle created: {combined_bundle}")
+    except ImportError:
+        logger.debug("ssl_utils not available, skipping combined CA bundle creation")
+    except Exception as e:
+        logger.warning(f"SSL setup warning: {e}")
+        
+except Exception as e:
+    logger.warning(f"SSL configuration error: {e}")
 
 import azure.functions as func
 from azure.cosmos import CosmosClient, PartitionKey, exceptions as cosmos_exceptions
