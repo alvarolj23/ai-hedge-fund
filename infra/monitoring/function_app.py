@@ -228,8 +228,10 @@ def _compose_queue_payload(
     ticker: str,
     triggered_at: dt.datetime,
     analysis_window_minutes: int,
-    summary: SignalSummary,
+    signal_result: SignalResult,
     watchlist: Iterable[str],
+    detection_method: str = "enhanced",
+    prices: list[Price] = None,
 ) -> dict:
     # Calculate proper date range for analysis (not timestamps)
     # Technical analysis requires at least 126 trading days (6 months) for momentum indicators
@@ -240,6 +242,11 @@ def _compose_queue_payload(
     eastern_now = triggered_at.astimezone(EASTERN)
     end_date = eastern_now.date().isoformat()
     start_date = (eastern_now.date() - dt.timedelta(days=lookback_days)).isoformat()
+
+    # Extract price data for snapshot (if available)
+    latest_close = prices[-1].close if prices and len(prices) > 0 else 0.0
+    previous_close = prices[-2].close if prices and len(prices) > 1 else 0.0
+    latest_volume = prices[-1].volume if prices and len(prices) > 0 else 0.0
 
     # Build the payload compatible with queue_worker.py expectations
     payload = {
@@ -256,20 +263,23 @@ def _compose_queue_payload(
         "user_id": os.getenv("MARKET_MONITOR_USER_ID", "market-monitor"),
         "strategy_id": os.getenv("MARKET_MONITOR_STRATEGY_ID", "auto-signal"),
 
-        # Market monitoring metadata (preserved for future use)
+        # Enhanced signal detection metadata (Fix #4)
+        "confidence": signal_result.confidence,
+        "priority": signal_result.priority,
+        "detection_method": detection_method,
+
+        # Market monitoring metadata with enhanced metrics
         "market_snapshot": {
-            "percent_change": round(summary.percent_change, 6),
-            "volume_ratio": round(summary.volume_ratio, 6) if summary.volume_ratio is not None else None,
-            "latest_close": summary.latest.close,
-            "previous_close": summary.previous.close,
-            "latest_volume": summary.latest.volume,
-            "average_volume": summary.average_volume,
+            "latest_close": latest_close,
+            "previous_close": previous_close,
+            "latest_volume": latest_volume,
+            **signal_result.metrics,  # Include all enhanced metrics (VWAP, ATR, RSI, etc.)
         },
-        "signals": summary.reasons,
+        "signals": signal_result.reasons,
         "triggered_at": _isoformat(triggered_at),
         "correlation_hints": {
             "related_watchlist": [symbol for symbol in watchlist if symbol != ticker],
-            "basis": summary.reasons,
+            "basis": signal_result.reasons,
         },
     }
     return payload
@@ -360,6 +370,24 @@ def market_monitor(market_timer: func.TimerRequest) -> None:
 
     for ticker in watchlist:
         logging.info("Processing ticker: %s", ticker)
+
+        # Fix #3: Check for fast_monitor candidates
+        fast_candidate = None
+        detection_method = "enhanced"
+        try:
+            # Query Cosmos for fast candidates from last 5 minutes
+            lookback_time = now_utc - dt.timedelta(minutes=5)
+            query = f"SELECT * FROM c WHERE c.ticker = '{ticker}' AND c.type = 'fast_candidate' AND c.status = 'pending_confirmation' AND c.detected_at >= '{_isoformat(lookback_time)}'"
+            candidates = list(cooldown_store._container.query_items(query=query, enable_cross_partition_query=True))
+
+            if candidates:
+                fast_candidate = candidates[0]  # Get most recent
+                logging.info("Found fast candidate for %s (detected at %s, confidence: %.2f)",
+                           ticker, fast_candidate.get("detected_at"), fast_candidate.get("confidence", 0))
+                detection_method = "fast_confirm"
+        except Exception as exc:
+            logging.error("Error querying fast candidates for %s: %s", ticker, exc)
+
         try:
             # Fetch intraday prices (5-minute bars by default)
             prices = _fetch_price_history(ticker, start_date, end_date, interval=interval, interval_multiplier=interval_multiplier)
@@ -374,30 +402,88 @@ def market_monitor(market_timer: func.TimerRequest) -> None:
             logging.exception("Failed to fetch prices for %s: %s", ticker, exc)
             continue
 
-        summary = _evaluate_signals(ticker, prices, percent_threshold, volume_multiplier, volume_window)
-        if not summary:
-            logging.info("No summary generated for %s (insufficient data)", ticker)
-            continue
-            
-        if not summary.triggered:
-            logging.info("%s: No signals triggered (change: %.2f%%, vol ratio: %s)", 
-                        ticker, summary.percent_change * 100, 
-                        f"{summary.volume_ratio:.2f}x" if summary.volume_ratio else "N/A")
+        # Use enhanced signal detection with 9+ indicators
+        signal_result = enhanced_signal_detection(
+            ticker=ticker,
+            prices=prices,
+            previous_day_close=previous_close,
+            percent_threshold=percent_threshold,
+            volume_multiplier=volume_multiplier,
+            vwap_std_threshold=float(os.getenv("MARKET_MONITOR_VWAP_STD_THRESHOLD", "2.0")),
+            velocity_threshold=float(os.getenv("MARKET_MONITOR_VELOCITY_THRESHOLD", "0.001"))
+        )
+
+        # Fix #3: Combine fast candidate confidence with enhanced detection
+        combined_confidence = signal_result.confidence
+        if fast_candidate:
+            fast_conf = fast_candidate.get("confidence", 0)
+            # Weighted combination: 40% fast, 60% enhanced
+            combined_confidence = (fast_conf * 0.4) + (signal_result.confidence * 0.6)
+            signal_result.confidence = round(combined_confidence, 2)
+
+            # Update priority if combined confidence is higher
+            if combined_confidence > 0.85:
+                signal_result.priority = "critical"
+            elif combined_confidence > 0.75:
+                signal_result.priority = "high"
+
+            logging.info("%s: Combined fast + enhanced confidence: %.2f (fast: %.2f, enhanced: %.2f)",
+                        ticker, combined_confidence, fast_conf, signal_result.confidence)
+
+            # Mark candidate as confirmed
+            try:
+                fast_candidate["status"] = "confirmed"
+                fast_candidate["confirmed_at"] = _isoformat(now_utc)
+                fast_candidate["final_confidence"] = combined_confidence
+                cooldown_store._container.upsert_item(fast_candidate)
+            except Exception as exc:
+                logging.error("Failed to update fast candidate status for %s: %s", ticker, exc)
+
+        # Decision: send to queue if confidence meets threshold
+        min_confidence = float(os.getenv("MARKET_MONITOR_MIN_CONFIDENCE", "0.70"))
+
+        if not signal_result.triggered:
+            logging.info("%s: No signals triggered (confidence: %.2f, metrics: %s)",
+                        ticker, signal_result.confidence, signal_result.metrics)
+
+            # Mark fast candidate as rejected if exists
+            if fast_candidate:
+                try:
+                    fast_candidate["status"] = "rejected_no_confirmation"
+                    cooldown_store._container.upsert_item(fast_candidate)
+                except Exception:
+                    pass
             continue
 
-        logging.info("%s: SIGNALS DETECTED - %s (change: %.2f%%, vol ratio: %.2fx)", 
-                    ticker, summary.reasons, summary.percent_change * 100, summary.volume_ratio or 0)
+        # Check if confidence meets threshold
+        if signal_result.confidence < min_confidence:
+            logging.info("%s: Signals triggered but confidence too low (%.2f < %.2f)",
+                        ticker, signal_result.confidence, min_confidence)
+
+            # Mark fast candidate as rejected if exists
+            if fast_candidate:
+                try:
+                    fast_candidate["status"] = "rejected_low_confidence"
+                    cooldown_store._container.upsert_item(fast_candidate)
+                except Exception:
+                    pass
+            continue
+
+        logging.info("%s: SIGNALS DETECTED - %s (confidence: %.2f, priority: %s, metrics: %s)",
+                    ticker, signal_result.reasons, signal_result.confidence,
+                    signal_result.priority, signal_result.metrics)
 
         last_trigger = cooldown_store.get_last_trigger(ticker)
         if last_trigger and now_utc - last_trigger < cooldown_window:
             logging.info("Ticker %s skipped due to cooldown (last trigger at %s)", ticker, last_trigger)
             continue
 
-        payload = _compose_queue_payload(ticker, now_utc, analysis_window_minutes, summary, watchlist)
+        payload = _compose_queue_payload(ticker, now_utc, analysis_window_minutes, signal_result, watchlist, detection_method=detection_method, prices=prices)
         try:
             queue_client.send_message(json.dumps(payload))
-            logging.info("✓ Enqueued analysis request for %s with reasons %s", ticker, summary.reasons)
-            cooldown_store.upsert_trigger(ticker, now_utc, summary.reasons)
+            logging.info("✓ Enqueued analysis request for %s - reasons: %s, confidence: %.2f, priority: %s",
+                        ticker, signal_result.reasons, signal_result.confidence, signal_result.priority)
+            cooldown_store.upsert_trigger(ticker, now_utc, signal_result.reasons)
         except Exception as exc:  # noqa: BLE001 - surface queue issues
             logging.exception("Failed to enqueue analysis for %s: %s", ticker, exc)
     
@@ -495,9 +581,28 @@ def fast_monitor(fast_timer: func.TimerRequest) -> None:
                     # This is a fast signal - log it for the 5-minute function to pick up
                     logging.info("🚨 FAST ALERT: %s moved %.2f%% in last minute", ticker, instant_change * 100)
 
-                    # Update a "fast signal" marker in Cosmos that the 5-min function can check
-                    # The 5-minute function will do the full analysis
-                    cooldown_store.upsert_trigger(ticker, now_utc, ["fast_movement"])
+                    # Store candidate signal in Cosmos for market_monitor to check (Fix #2)
+                    # Calculate preliminary confidence for fast signal
+                    fast_confidence = min(instant_change / fast_percent_threshold, 1.0) * 0.65
+
+                    candidate_payload = {
+                        "id": f"{ticker}_fast_{int(now_utc.timestamp())}",
+                        "ticker": ticker,
+                        "type": "fast_candidate",
+                        "detected_at": _isoformat(now_utc),
+                        "trigger_price": latest_price,
+                        "instant_change": round(instant_change, 6),
+                        "confidence": round(fast_confidence, 2),
+                        "status": "pending_confirmation",
+                        "last_reasons": ["fast_movement"],
+                        "last_triggered_utc": _isoformat(now_utc),
+                    }
+
+                    try:
+                        cooldown_store._container.upsert_item(candidate_payload)
+                        logging.info("✓ Stored fast candidate for %s (confidence: %.2f)", ticker, fast_confidence)
+                    except Exception as exc:
+                        logging.error("Failed to store fast candidate for %s: %s", ticker, exc)
 
         except Exception as exc:
             logging.error("Fast monitor error for %s: %s", ticker, exc)
@@ -538,48 +643,148 @@ def validation_monitor(validation_timer: func.TimerRequest) -> None:
         logging.error("Cosmos configuration error: %s", exc)
         return
 
-    # Check which tickers have triggered in the last 15 minutes
-    lookback_window = dt.timedelta(minutes=15)
+    # Fix #5: Query Cosmos for confirmed signals in last 15 minutes
+    lookback_time = now_utc - dt.timedelta(minutes=15)
     multi_client = MultiAPIClient()
 
-    for ticker in watchlist:
+    try:
+        queue_client = _load_queue_client()
+    except RuntimeError as exc:
+        logging.error("Queue client initialization failed: %s", exc)
+        queue_client = None
+
+    # Query for confirmed candidates that need validation
+    try:
+        query = f"SELECT * FROM c WHERE c.type = 'fast_candidate' AND c.status = 'confirmed' AND c.confirmed_at >= '{_isoformat(lookback_time)}'"
+        confirmed_signals = list(cooldown_store._container.query_items(query=query, enable_cross_partition_query=True))
+        logging.info("Found %d confirmed signals to validate", len(confirmed_signals))
+    except Exception as exc:
+        logging.error("Error querying confirmed signals: %s", exc)
+        confirmed_signals = []
+
+    for signal_doc in confirmed_signals:
+        ticker = signal_doc.get("ticker")
+        if not ticker:
+            continue
+
         try:
-            last_trigger = cooldown_store.get_last_trigger(ticker)
-            if not last_trigger:
-                continue
+            trigger_price = signal_doc.get("trigger_price", 0)
+            detected_at_str = signal_doc.get("detected_at", "")
+            signal_confidence = signal_doc.get("final_confidence", signal_doc.get("confidence", 0))
 
-            if now_utc - last_trigger > lookback_window:
-                continue
+            logging.info("Validating signal for %s (trigger price: %.2f, confidence: %.2f)",
+                        ticker, trigger_price, signal_confidence)
 
-            logging.info("Validating recent signal for %s (triggered %s ago)",
-                        ticker, now_utc - last_trigger)
-
-            # Get RSI from Alpha Vantage for validation
-            rsi = multi_client.alpha_vantage.get_rsi(ticker, interval="5min", time_period=14)
-
-            if rsi:
-                logging.info("%s validation - RSI(14): %.2f", ticker, rsi)
-
-                # Log overbought/oversold conditions
-                if rsi >= 70:
-                    logging.info("⚠️  %s: RSI indicates overbought (%.2f)", ticker, rsi)
-                elif rsi <= 30:
-                    logging.info("⚠️  %s: RSI indicates oversold (%.2f)", ticker, rsi)
-                else:
-                    logging.info("✓ %s: RSI neutral (%.2f)", ticker, rsi)
-
-            # Get recent intraday bars for trend confirmation
+            # Get recent intraday bars for validation
             bars = multi_client.get_intraday_bars(ticker, interval_minutes=5, limit=12)  # Last hour
 
+            if not bars or len(bars) < 6:
+                logging.warning("Insufficient data for validation of %s", ticker)
+                continue
+
+            # Convert to Price objects for RSI calculation
+            prices = [
+                Price(
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    time=bar.timestamp.isoformat()
+                )
+                for bar in bars
+            ]
+
+            current_price = bars[-1].close
+            initial_direction = "bullish" if signal_doc.get("instant_change", 0) > 0 else "bearish"
+
+            # Calculate validation score (0-100)
+            validation_score = 0
+
+            # 1. Price moved in expected direction? (+30 points)
+            if trigger_price > 0:
+                price_change = (current_price - trigger_price) / trigger_price
+                if (initial_direction == "bullish" and price_change > 0) or \
+                   (initial_direction == "bearish" and price_change < 0):
+                    validation_score += 30
+                    logging.info("✓ %s: Price moved in expected direction (%.2f%%)",
+                               ticker, price_change * 100)
+                else:
+                    logging.info("✗ %s: Price reversed (%.2f%% vs expected %s)",
+                               ticker, price_change * 100, initial_direction)
+
+            # 2. Momentum continuing? (+20 points)
             if len(bars) >= 6:
                 recent_trend = sum(1 if bars[i].close > bars[i-1].close else -1 for i in range(1, 6))
-
-                if recent_trend >= 4:
-                    logging.info("✓ %s: Strong uptrend confirmed (last 30 min)", ticker)
-                elif recent_trend <= -4:
-                    logging.info("✓ %s: Strong downtrend confirmed (last 30 min)", ticker)
+                if abs(recent_trend) >= 3:
+                    validation_score += 20
+                    logging.info("✓ %s: Momentum confirmed (trend score: %d)", ticker, recent_trend)
                 else:
-                    logging.info("⚠️  %s: Mixed signals, trend unclear", ticker)
+                    logging.info("✗ %s: Weak momentum (trend score: %d)", ticker, recent_trend)
+
+            # 3. RSI confirms (not overbought/oversold)? (+20 points)
+            rsi = calculate_rsi(prices, period=14)
+            if 30 < rsi < 70:
+                validation_score += 20
+                logging.info("✓ %s: RSI neutral (%.2f)", ticker, rsi)
+            else:
+                logging.info("⚠️  %s: RSI extreme (%.2f)", ticker, rsi)
+
+            # 4. Volume sustained? (+30 points)
+            recent_volume = sum(bar.volume for bar in bars[-3:]) / 3
+            earlier_volume = sum(bar.volume for bar in bars[-9:-3]) / 6
+            if earlier_volume > 0 and recent_volume / earlier_volume >= 0.8:
+                validation_score += 30
+                logging.info("✓ %s: Volume sustained (%.2fx)", ticker, recent_volume / earlier_volume)
+            else:
+                logging.info("✗ %s: Volume dropped", ticker)
+
+            logging.info("%s: Validation score: %d/100", ticker, validation_score)
+
+            # Update signal document with validation results
+            signal_doc["validation_score"] = validation_score
+            signal_doc["validated_at"] = _isoformat(now_utc)
+            signal_doc["validation_rsi"] = rsi
+            signal_doc["validation_price"] = current_price
+            signal_doc["validation_price_change"] = round((current_price - trigger_price) / trigger_price, 6) if trigger_price > 0 else 0
+
+            # Decision: Send EXIT signal if validation fails badly
+            exit_threshold = int(os.getenv("VALIDATION_EXIT_THRESHOLD", "30"))
+
+            if validation_score < exit_threshold:
+                logging.warning("🚨 VALIDATION FAILED for %s (score: %d < %d) - Sending EXIT signal",
+                              ticker, validation_score, exit_threshold)
+
+                signal_doc["status"] = "invalidated"
+                signal_doc["exit_signal_sent"] = True
+
+                # Send EXIT message to queue
+                if queue_client:
+                    exit_payload = {
+                        "action": "exit_position",
+                        "tickers": [ticker],
+                        "reason": "signal_invalidated",
+                        "validation_score": validation_score,
+                        "triggered_at": _isoformat(now_utc),
+                        "detection_method": "validation_exit",
+                        "user_id": os.getenv("MARKET_MONITOR_USER_ID", "market-monitor"),
+                        "strategy_id": os.getenv("MARKET_MONITOR_STRATEGY_ID", "auto-signal"),
+                    }
+
+                    try:
+                        queue_client.send_message(json.dumps(exit_payload))
+                        logging.info("✓ EXIT signal sent for %s (validation failed)", ticker)
+                    except Exception as exc:
+                        logging.error("Failed to send EXIT signal for %s: %s", ticker, exc)
+            else:
+                logging.info("✓ %s: Validation passed (score: %d)", ticker, validation_score)
+                signal_doc["status"] = "validated"
+
+            # Store validation results
+            try:
+                cooldown_store._container.upsert_item(signal_doc)
+            except Exception as exc:
+                logging.error("Failed to update validation for %s: %s", ticker, exc)
 
         except Exception as exc:
             logging.error("Validation error for %s: %s", ticker, exc)
