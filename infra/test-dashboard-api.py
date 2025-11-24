@@ -6,8 +6,52 @@ without requiring external tools like jq or curl.
 """
 import requests
 import json
+import os
+import sys
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
+
+# SSL / Certificate setup for corporate environments (must be done early)
+try:
+    # Try Windows certificate store integration first
+    try:
+        tests_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tests')
+        if os.path.exists(tests_dir) and tests_dir not in sys.path:
+            sys.path.insert(0, tests_dir)
+        
+        from windows_cert_helpers import patch_ssl_with_windows_trust_store
+        patch_ssl_with_windows_trust_store()
+        print("✅ Windows certificate store integration enabled")
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"⚠️  Windows cert store integration skipped: {e}")
+    
+    # Create combined CA bundle if ssl_utils is available
+    try:
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        if root_dir not in sys.path:
+            sys.path.insert(0, root_dir)
+        
+        from src.utils.ssl_utils import create_combined_cabundle, patch_requests_session
+        
+        CORP_CA_BUNDLE = os.getenv(
+            "CORP_CA_BUNDLE",
+            r"C:\Users\ama5332\OneDrive - Toyota Motor Europe\Documents\certs\TME_certificates_chain.crt"
+        )
+        combined_bundle = create_combined_cabundle(CORP_CA_BUNDLE)
+        if combined_bundle:
+            print(f"✅ Combined CA bundle created: {combined_bundle}")
+            # Set the SSL_CERT_FILE environment variable for requests library
+            os.environ['SSL_CERT_FILE'] = combined_bundle
+            os.environ['REQUESTS_CA_BUNDLE'] = combined_bundle
+    except ImportError:
+        print("⚠️  ssl_utils not available, using default certificates")
+    except Exception as e:
+        print(f"⚠️  SSL setup warning: {e}")
+        
+except Exception as e:
+    print(f"⚠️  SSL configuration error: {e}")
 
 
 class DashboardTester:
@@ -17,6 +61,20 @@ class DashboardTester:
         """Initialize tester with API URL."""
         self.api_url = api_url.rstrip('/')
         self.session = requests.Session()
+        
+        # Apply SSL configuration to session
+        try:
+            from src.utils.ssl_utils import patch_requests_session
+            patch_requests_session(self.session)
+            print("✅ SSL configuration applied to session")
+        except ImportError:
+            # If ssl_utils not available, use environment variables
+            if 'SSL_CERT_FILE' in os.environ:
+                self.session.verify = os.environ['SSL_CERT_FILE']
+                print(f"✅ Using SSL_CERT_FILE: {os.environ['SSL_CERT_FILE']}")
+        except Exception as e:
+            print(f"⚠️  Could not apply SSL config to session: {e}")
+        
         self.results = []
 
     def test_endpoint(self, name: str, method: str, path: str, params: Dict = None) -> Dict[str, Any]:
@@ -56,7 +114,7 @@ class DashboardTester:
                 "status_code": response.status_code,
                 "success": response.status_code == 200,
                 "data": data,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
             self.results.append(result)
@@ -90,7 +148,7 @@ class DashboardTester:
         print("AI HEDGE FUND DASHBOARD API TESTS")
         print(f"{'#'*70}")
         print(f"Testing API: {self.api_url}")
-        print(f"Started at: {datetime.utcnow().isoformat()}")
+        print(f"Started at: {datetime.now(timezone.utc).isoformat()}")
 
         # Test 1: Health check
         self.test_endpoint(
@@ -214,7 +272,7 @@ class DashboardTester:
                     print("   - Run: az containerapp update --name aihedgefund-api ...")
 
         print(f"\n{'='*70}")
-        print(f"Tests completed at: {datetime.utcnow().isoformat()}")
+        print(f"Tests completed at: {datetime.now(timezone.utc).isoformat()}")
         print(f"{'='*70}\n")
 
 
