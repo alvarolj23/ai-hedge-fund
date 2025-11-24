@@ -35,11 +35,12 @@ param(
     [string]$ApiUrl = "https://aihedgefund-api.wittysand-2cb74b22.westeurope.azurecontainerapps.io",
     [string]$GitHubRepo = "",
     [string]$GitHubBranch = "main",
-    [string]$CosmosAccountName = "aihedgefundcosmos",
+    [string]$CosmosAccountName = "cosmos-cryptoanalysis-prod-cqpvo3njb4joq",
+    [string]$CosmosResourceGroup = "rg-common-infra",
     [string]$CosmosDatabase = "ai-hedge-fund"
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
@@ -62,7 +63,7 @@ $containersToCreate = @(
 # Get Cosmos account name from resource group if not provided
 if (-not $CosmosAccountName -or $CosmosAccountName -eq "aihedgefundcosmos") {
     Write-Host "Finding Cosmos DB account..." -ForegroundColor Gray
-    $cosmosAccounts = az cosmosdb list --resource-group $ResourceGroup --query "[].name" -o tsv 2>$null
+    $cosmosAccounts = az cosmosdb list --resource-group $CosmosResourceGroup --query "[].name" -o tsv 2>$null
     if ($cosmosAccounts) {
         $CosmosAccountName = $cosmosAccounts.Split("`n")[0]
         Write-Host "  Found: $CosmosAccountName" -ForegroundColor Gray
@@ -76,7 +77,7 @@ foreach ($container in $containersToCreate) {
         --account-name $CosmosAccountName `
         --database-name $CosmosDatabase `
         --name $container.Name `
-        --resource-group $ResourceGroup `
+        --resource-group $CosmosResourceGroup `
         2>$null
 
     if ($exists -eq "false" -or $LASTEXITCODE -ne 0) {
@@ -87,22 +88,21 @@ foreach ($container in $containersToCreate) {
             --database-name $CosmosDatabase `
             --name $container.Name `
             --partition-key-path $container.PartitionKey `
-            --throughput 400 `
-            --resource-group $ResourceGroup `
+            --resource-group $CosmosResourceGroup `
             --output none
 
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "  ✅ Created: $($container.Name)" -ForegroundColor Green
+            Write-Host "  Created: $($container.Name)" -ForegroundColor Green
         } else {
-            Write-Host "  ⚠️  Failed to create: $($container.Name)" -ForegroundColor Yellow
+            Write-Host "  Failed to create: $($container.Name)" -ForegroundColor Yellow
         }
     } else {
-        Write-Host "  ✅ Already exists: $($container.Name)" -ForegroundColor Green
+        Write-Host "  Already exists: $($container.Name)" -ForegroundColor Green
     }
 }
 
 Write-Host ""
-Write-Host "✅ Cosmos DB setup complete" -ForegroundColor Green
+Write-Host "Cosmos DB setup complete" -ForegroundColor Green
 Write-Host ""
 
 # Step 2: Deploy Static Web App
@@ -112,7 +112,7 @@ Write-Host ""
 $bicepFile = Join-Path $PSScriptRoot "bicep\dashboard.bicep"
 
 if (-not (Test-Path $bicepFile)) {
-    Write-Host "❌ Bicep file not found: $bicepFile" -ForegroundColor Red
+    Write-Host "ERROR: Bicep file not found: $bicepFile" -ForegroundColor Red
     exit 1
 }
 
@@ -137,7 +137,7 @@ $deployment = az deployment group create `
     -o json 2>&1
 
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "✅ Static Web App deployed" -ForegroundColor Green
+    Write-Host "Static Web App deployed" -ForegroundColor Green
 
     $outputs = $deployment | ConvertFrom-Json
     $staticWebAppName = $outputs.staticWebAppName.value
@@ -155,11 +155,11 @@ if ($LASTEXITCODE -eq 0) {
         2>$null
 
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "✅ Static Web App already exists" -ForegroundColor Green
+        Write-Host "Static Web App already exists" -ForegroundColor Green
         $appData = $existingApp | ConvertFrom-Json
         $staticWebAppUrl = $appData.defaultHostname
     } else {
-        Write-Host "❌ Failed to deploy Static Web App" -ForegroundColor Red
+        Write-Host "ERROR: Failed to deploy Static Web App" -ForegroundColor Red
         Write-Host "Please create it manually in Azure Portal" -ForegroundColor Yellow
         exit 1
     }
@@ -184,9 +184,9 @@ az staticwebapp appsettings set `
     --output none 2>$null
 
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "✅ Environment variables configured" -ForegroundColor Green
+    Write-Host "Environment variables configured" -ForegroundColor Green
 } else {
-    Write-Host "⚠️  Could not set environment variables via CLI" -ForegroundColor Yellow
+    Write-Host "WARNING: Could not set environment variables via CLI" -ForegroundColor Yellow
     Write-Host "  Please set manually in Azure Portal" -ForegroundColor Yellow
 }
 
@@ -203,7 +203,7 @@ $deploymentToken = az staticwebapp secrets list `
     -o tsv 2>$null
 
 if ($LASTEXITCODE -eq 0 -and $deploymentToken) {
-    Write-Host "✅ Deployment token retrieved" -ForegroundColor Green
+    Write-Host "Deployment token retrieved" -ForegroundColor Green
     Write-Host ""
 
     # Step 5: Build and deploy dashboard
@@ -217,17 +217,17 @@ if ($LASTEXITCODE -eq 0 -and $deploymentToken) {
         # Create .env file
         Write-Host "Creating .env file..." -ForegroundColor Gray
         "VITE_API_URL=$ApiUrl" | Out-File -FilePath ".env" -Encoding UTF8 -Force
-        Write-Host "✅ .env file created" -ForegroundColor Green
+        Write-Host ".env file created" -ForegroundColor Green
 
         # Install dependencies
         Write-Host "Installing dependencies..." -ForegroundColor Gray
         npm install --silent
-        Write-Host "✅ Dependencies installed" -ForegroundColor Green
+        Write-Host "Dependencies installed" -ForegroundColor Green
 
         # Build
         Write-Host "Building dashboard..." -ForegroundColor Gray
         npm run build
-        Write-Host "✅ Build complete" -ForegroundColor Green
+        Write-Host "Build complete" -ForegroundColor Green
 
         # Check if SWA CLI is installed
         $swaCliInstalled = Get-Command swa -ErrorAction SilentlyContinue
@@ -235,7 +235,7 @@ if ($LASTEXITCODE -eq 0 -and $deploymentToken) {
         if (-not $swaCliInstalled) {
             Write-Host "Installing Azure Static Web Apps CLI..." -ForegroundColor Gray
             npm install -g @azure/static-web-apps-cli
-            Write-Host "✅ SWA CLI installed" -ForegroundColor Green
+            Write-Host "SWA CLI installed" -ForegroundColor Green
         }
 
         # Deploy
@@ -245,16 +245,16 @@ if ($LASTEXITCODE -eq 0 -and $deploymentToken) {
             --env production
 
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "✅ Dashboard deployed successfully!" -ForegroundColor Green
+            Write-Host "Dashboard deployed successfully!" -ForegroundColor Green
         } else {
-            Write-Host "⚠️  Deployment completed with warnings" -ForegroundColor Yellow
+            Write-Host "WARNING: Deployment completed with warnings" -ForegroundColor Yellow
         }
 
     } finally {
         Pop-Location
     }
 } else {
-    Write-Host "⚠️  Could not retrieve deployment token" -ForegroundColor Yellow
+    Write-Host "WARNING: Could not retrieve deployment token" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "Alternative: Set up GitHub Actions deployment" -ForegroundColor Cyan
     Write-Host "1. Get deployment token from Azure Portal:" -ForegroundColor White
@@ -270,10 +270,10 @@ if ($LASTEXITCODE -eq 0 -and $deploymentToken) {
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Green
-Write-Host "✅ DEPLOYMENT COMPLETE!" -ForegroundColor Green
+Write-Host "DEPLOYMENT COMPLETE!" -ForegroundColor Green
 Write-Host "================================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "🌐 Dashboard URL: https://$staticWebAppUrl" -ForegroundColor Cyan
+Write-Host "Dashboard URL: https://$staticWebAppUrl" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Visit the dashboard URL above" -ForegroundColor White
@@ -282,5 +282,5 @@ Write-Host "  3. If using GitHub Actions, set up secrets (see above)" -Foregroun
 Write-Host "  4. Run an analysis to populate data:" -ForegroundColor White
 Write-Host "     .\test-queue.ps1 -Tickers 'NVDA' -LookbackDays 30" -ForegroundColor Gray
 Write-Host ""
-Write-Host "📚 Documentation: infra/DASHBOARD_DEPLOYMENT.md" -ForegroundColor Gray
+Write-Host "Documentation: infra/DASHBOARD_DEPLOYMENT.md" -ForegroundColor Gray
 Write-Host ""
