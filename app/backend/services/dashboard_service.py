@@ -155,7 +155,7 @@ class DashboardService:
             ]
 
             # Execute query (assuming broker-orders container)
-            container = repo.database.get_container_client("broker-orders")
+            container = repo._database.get_container_client("broker-orders")
             trades = list(container.query_items(
                 query=query,
                 parameters=parameters,
@@ -277,7 +277,7 @@ class DashboardService:
             query = " ".join(query_parts)
 
             # Execute query
-            container = repo.database.get_container_client("broker-orders")
+            container = repo._database.get_container_client("broker-orders")
             trades = list(container.query_items(
                 query=query,
                 parameters=parameters,
@@ -350,7 +350,7 @@ class DashboardService:
             ]
 
             # Execute query
-            container = repo.database.get_container_client("analyst-signals")
+            container = repo._database.get_container_client("analyst-signals")
             signals = list(container.query_items(
                 query=query,
                 parameters=parameters,
@@ -456,7 +456,7 @@ class DashboardService:
                 repo = CosmosRepository.from_environment()
 
                 # Try a simple query
-                container = repo.database.get_container_client("broker-orders")
+                container = repo._database.get_container_client("broker-orders")
                 list(container.query_items(
                     query="SELECT TOP 1 * FROM c",
                     enable_cross_partition_query=True
@@ -554,7 +554,7 @@ class DashboardService:
             ]
 
             # Execute query
-            container = repo.database.get_container_client("portfolioSnapshots")
+            container = repo._database.get_container_client("portfolioSnapshots")
             snapshots = list(container.query_items(
                 query=query,
                 parameters=parameters,
