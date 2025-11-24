@@ -86,6 +86,45 @@ def calculate_atr(prices: list[Price], period: int = 14) -> float:
     return atr
 
 
+def calculate_rsi(prices: list[Price], period: int = 14) -> float:
+    """
+    Calculate RSI (Relative Strength Index) locally without API calls
+
+    Args:
+        prices: Price history
+        period: RSI period (default 14)
+
+    Returns:
+        RSI value (0-100), or 50.0 if insufficient data
+    """
+    if len(prices) < period + 1:
+        return 50.0  # Neutral
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(prices)):
+        change = prices[i].close - prices[i-1].close
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(change))
+
+    # Calculate average gain and loss over the period
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+
+    if avg_loss == 0:
+        return 100.0  # All gains, maximum RSI
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+
+    return round(rsi, 2)
+
+
 def detect_gap(latest: Price, previous_close: float, threshold: float = 0.015) -> Optional[str]:
     """
     Detect gap at market open
