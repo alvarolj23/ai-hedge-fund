@@ -10,14 +10,21 @@ on:
       - 'app/backend/routes/dashboard.py'
       - 'app/backend/routes/config.py'
       - 'app/backend/services/dashboard_service.py'
+      - '.github/workflows/dashboard-deploy.yml'
   workflow_dispatch:
+
+env:
+  VITE_API_URL: ${{ secrets.VITE_API_URL || 'https://aihedgefund-api.wittysand-2cb74b22.westeurope.azurecontainerapps.io' }}
 
 jobs:
   build_and_deploy:
+    # Only run if we have the deployment token
+    if: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN != '' }}
     runs-on: ubuntu-latest
     name: Build and Deploy Dashboard
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
         with:
           submodules: true
 
@@ -29,18 +36,17 @@ jobs:
           cache-dependency-path: dashboard/package-lock.json
 
       - name: Install dependencies
-        run: |
-          cd dashboard
-          npm ci
+        working-directory: dashboard
+        run: npm ci
 
       - name: Build dashboard
-        run: |
-          cd dashboard
-          npm run build
+        working-directory: dashboard
+        run: npm run build
         env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_API_URL: ${{ env.VITE_API_URL }}
 
       - name: Deploy to Azure Static Web Apps
+        id: deploy
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
@@ -49,3 +55,53 @@ jobs:
           app_location: "dashboard"
           api_location: ""
           output_location: "dist"
+          skip_app_build: true  # We already built it
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "✅ Dashboard deployed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "🌐 URL: Check Azure Portal for the Static Web App URL" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+  build_only:
+    # Run this job if we don't have the deployment token (just to verify build works)
+    if: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN == '' }}
+    runs-on: ubuntu-latest
+    name: Build Dashboard (No Deployment)
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ env.VITE_API_URL }}
+
+      - name: Setup instructions
+        run: |
+          echo "⚠️ Deployment skipped - missing AZURE_STATIC_WEB_APPS_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## To enable automatic deployment:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Create Static Web App in Azure Portal" >> $GITHUB_STEP_SUMMARY
+          echo "2. Get deployment token from: Static Web App → Settings → Deployment tokens" >> $GITHUB_STEP_SUMMARY
+          echo "3. Add to GitHub Secrets:" >> $GITHUB_STEP_SUMMARY
+          echo "   - Name: \`AZURE_STATIC_WEB_APPS_API_TOKEN\`" >> $GITHUB_STEP_SUMMARY
+          echo "   - Value: <paste token>" >> $GITHUB_STEP_SUMMARY
+          echo "4. Add API URL secret:" >> $GITHUB_STEP_SUMMARY
+          echo "   - Name: \`VITE_API_URL\`" >> $GITHUB_STEP_SUMMARY
+          echo "   - Value: \`https://aihedgefund-api.wittysand-2cb74b22.westeurope.azurecontainerapps.io\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Or run: \`infra/deploy-dashboard-complete.ps1\`" >> $GITHUB_STEP_SUMMARY
